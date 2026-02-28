@@ -77,6 +77,7 @@ type NearThreatState = {
 
 interface PongDifficultyTuning {
   curve: number;
+  playerPaddleSpeed: number;
   ballSpeedX: number;
   ballSpeedY: number;
   ballMaxSpeed: number;
@@ -99,20 +100,24 @@ export const getPongDifficultyTuning = (difficulty: number): PongDifficultyTunin
   const curve = difficultyCurve(difficulty);
   return {
     curve,
-    ballSpeedX: lerp(120, 760, curve) * PONG_INITIAL_SPEED,
-    ballSpeedY: lerp(180, 1120, curve) * PONG_INITIAL_SPEED,
-    ballMaxSpeed: lerp(320, 1950, curve) * PONG_INITIAL_SPEED,
+    // Let skilled players keep up at high difficulty while staying controllable at low levels.
+    playerPaddleSpeed: lerp(300, 780, curve),
+    // Keep baseline play close to prior up/down feel and reserve sharp speed for high difficulty.
+    ballSpeedX: lerp(70, 520, curve) * PONG_INITIAL_SPEED,
+    ballSpeedY: lerp(90, 700, curve) * PONG_INITIAL_SPEED,
+    ballMaxSpeed: lerp(170, 1450, curve) * PONG_INITIAL_SPEED,
     bounceGain: lerp(1.01, 1.10, curve),
-    aiErrorAmplitude: lerp(95, 4, curve),
-    aiDeadZone: lerp(95, 6, curve),
-    aiResponseGain: lerp(0.014, 0.18, curve),
-    aiMaxStepPerSecond: lerp(90, 440, curve),
+    aiErrorAmplitude: lerp(80, 3, curve),
+    aiDeadZone: lerp(70, 2, curve),
+    aiResponseGain: lerp(0.03, 0.22, curve),
+    aiMaxStepPerSecond: lerp(220, 760, curve),
   };
 };
 
 const DEFAULT_TUNING = getPongDifficultyTuning(DEFAULT_DIFFICULTY);
 export const BALL_SPEED_X = DEFAULT_TUNING.ballSpeedX;
 export const BALL_SPEED_Y = DEFAULT_TUNING.ballSpeedY;
+const DIFFICULTY_SMOOTHING = 0.08;
 
 const distanceToGoalLine = (runtimeState: RuntimeState, nearSide: NearGoalSide): number => {
   if (nearSide === "player_goal") {
@@ -160,7 +165,9 @@ export const stepPongPhysics = (
     const moveLeft = inputState.left || inputState.up;
     const moveRight = inputState.right || inputState.down;
     runtimeState.topPaddle.x +=
-      ((moveRight ? 1 : 0) - (moveLeft ? 1 : 0)) * PADDLE_SPEED * (FRAME_MS / 1000);
+      ((moveRight ? 1 : 0) - (moveLeft ? 1 : 0)) *
+      tuning.playerPaddleSpeed *
+      (FRAME_MS / 1000);
   }
 
   const phase =
@@ -272,11 +279,13 @@ export const stepPongPhysics = (
   if (runtimeState.ball.y < -radius) {
     runtimeState.aiScore += 1;
     scoreSide = "ai";
-    ({ ballVX, ballVY } = resetBall(runtimeState, ballVX, -1, tuning));
+    // Serve toward the scorer's side to reduce runaway streaks.
+    ({ ballVX, ballVY } = resetBall(runtimeState, ballVX, 1, tuning));
   } else if (runtimeState.ball.y > runtimeState.height + radius) {
     runtimeState.playerScore += 1;
     scoreSide = "player";
-    ({ ballVX, ballVY } = resetBall(runtimeState, ballVX, 1, tuning));
+    // Serve toward the scorer's side to reduce runaway streaks.
+    ({ ballVX, ballVY } = resetBall(runtimeState, ballVX, -1, tuning));
   }
 
   return {
@@ -309,7 +318,7 @@ export const createPongLoop = (cfg: LoopConfig) => {
   } = cfg;
 
   const getControlMode = () => controlModeRef?.current ?? controlMode;
-  const getDifficulty = () => clamp01(difficultyRef?.current ?? DEFAULT_DIFFICULTY);
+  const getDifficultyTarget = () => clamp01(difficultyRef?.current ?? DEFAULT_DIFFICULTY);
   let rafId = 0;
   let lastTs = performance.now();
   let accumulator = 0;
@@ -322,8 +331,9 @@ export const createPongLoop = (cfg: LoopConfig) => {
   let collisionResolvedPerSecond = 0;
   let positionClampedPerSecond = 0;
 
-  let ballVX = getPongDifficultyTuning(getDifficulty()).ballSpeedX;
-  let ballVY = getPongDifficultyTuning(getDifficulty()).ballSpeedY;
+  let ballVX = getPongDifficultyTuning(getDifficultyTarget()).ballSpeedX;
+  let ballVY = getPongDifficultyTuning(getDifficultyTarget()).ballSpeedY;
+  let liveDifficulty = getDifficultyTarget();
   let nearThreat: NearThreatState | null = null;
   let nearScoreCooldownUntilMs = 0;
 
@@ -367,6 +377,8 @@ export const createPongLoop = (cfg: LoopConfig) => {
     let stepsThisTick = 0;
     while (accumulator >= FRAME_MS && stepsThisTick < MAX_STEPS_PER_TICK) {
       const stepNowMs = now - accumulator;
+      const targetDifficulty = getDifficultyTarget();
+      liveDifficulty = lerp(liveDifficulty, targetDifficulty, DIFFICULTY_SMOOTHING);
       const stepResult = stepPongPhysics(
         runtimeState,
         {
@@ -377,7 +389,7 @@ export const createPongLoop = (cfg: LoopConfig) => {
         getControlMode(),
         ballVX,
         ballVY,
-        getDifficulty(),
+        liveDifficulty,
       );
 
       ballVX = stepResult.ballVX;
