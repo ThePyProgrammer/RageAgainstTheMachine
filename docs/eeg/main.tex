@@ -50,7 +50,7 @@ A Reproducible Study of Representation--Classification Decoupling and Variable-C
 }
 
 \begin{abstract}
-This paper documents a full experimental cycle for adapting a pre-trained EEG foundation model (LaBraM) to motor-imagery (MI) classification in a practical BCI pipeline. The study is motivated by a concrete research gap: although foundation models are expected to decouple representation learning from downstream classification, evidence is limited on whether this decoupling remains effective when electrode configurations vary and downstream data are modest. We evaluate frozen probing, partial unfreezing, binary-vs-multiclass tasking, balancing strategies, and stabilization procedures under explicit per-class diagnostics. Across LaBraM runs, the dominant behavior is class collapse and class flipping, with multiclass performance near chance and binary performance only modestly above chance. A full-fine-tuning run reached rapid training memorization (train accuracy $\approx 0.997$) but did not improve generalization (best validation accuracy $0.5222$, early stop at epoch 46). We additionally integrate an EEGNetResidual baseline log from \texttt{ml/\_\_init\_\_.py}, which reached a higher best validation accuracy ($0.5919$) on a balanced binary split. The manuscript contributes a reproducible negative-result FM baseline, explicit research-question answers, a clear FM adaptation diagram, and a complete raw-log appendix for future iteration.
+This paper documents a full experimental cycle for adapting a pre-trained EEG foundation model (LaBraM) to motor-imagery (MI) classification in a practical BCI pipeline. The study is motivated by a concrete research gap: although foundation models are expected to decouple representation learning from downstream classification, evidence is limited on whether this decoupling remains effective when electrode configurations vary and downstream data are modest. We evaluate frozen probing, partial unfreezing, binary-vs-multiclass tasking, balancing strategies, and stabilization procedures under explicit per-class diagnostics. Across LaBraM runs, the dominant behavior is class collapse and class flipping, with multiclass performance near chance and binary performance only modestly above chance. A full-fine-tuning run reached rapid training memorization (train accuracy $\approx 0.997$) but did not improve generalization (best validation accuracy $0.5222$, early stop at epoch 46). A two-stage LaBraM run (head-only, then unfreeze last 2 blocks) achieved best MCC $0.0753$ with best validation accuracy $0.5378$ and early stopping at epoch 53, improving selection stability but not headline accuracy. We additionally integrate an EEGNetResidual baseline log from \texttt{ml/\_\_init\_\_.py}, which reached a higher best validation accuracy ($0.5919$) on a balanced binary split, and a new user-specific Muse calibration fine-tuning run (\texttt{ml/tune\_eegnet\_muse.py}) that reached $0.9286$ validation accuracy on a small within-user holdout ($14$ epochs). The manuscript contributes reproducible FM negative results, a practical personalization script, explicit research-question answers, a clear FM adaptation diagram, and a complete raw-log appendix for future iteration.
 \end{abstract}
 
 \begin{document}
@@ -164,7 +164,20 @@ Variants tested during iteration:
 \item Class balancing strategies (sampler and/or weighted loss).
 \item CLS pooling, long-context resampling, label smoothing, and scheduler stabilization.
 \item Full fine-tuning wiring (all encoder parameters trainable).
+\item Two-stage LaBraM adaptation (head-only stage, then controlled unfreezing) with MCC-based checkpoint selection.
 \item External baseline integration from \texttt{ml/\_\_init\_\_.py} logs (EEGNetResidual on 4-channel binary MI).
+\item User-specific calibration fine-tuning from Muse CSV captures (\texttt{ml/calibration\_data/}) with \texttt{ml/tune\_eegnet\_muse.py}.
+\end{itemize}
+
+\subsection{Personal Calibration Fine-Tuning Protocol (Muse)}
+To test rapid personalization, we fine-tuned the trained 4-channel EEGNetResidual checkpoint (\texttt{ml/models/baseline\_2/eegnet\_best.pth}) on user-collected Muse data:
+\begin{itemize}
+\item \textbf{Files:} \texttt{left\_muse\_v1.csv}, \texttt{right\_muse\_v1.csv}.
+\item \textbf{Channels used:} AF7, AF8, TP9, TP10 (from CSV columns \texttt{AF7\_uV}, \texttt{AF8\_uV}, \texttt{TP9\_uV}, \texttt{TP10\_uV}).
+\item \textbf{Preprocessing:} 8--30 Hz 5th-order Butterworth bandpass, 3-second epoching at estimated 250 Hz (750 samples), then temporal resampling to model input length (481 samples).
+\item \textbf{Split:} 68 total epochs (33 left, 35 right), random train/validation split: 54/14.
+\item \textbf{Optimization:} Adam, learning rate $10^{-4}$, batch size 16, 200 epochs, early feature freezing (\texttt{conv1} and \texttt{batchnorm1}).
+\item \textbf{Checkpoint output:} \texttt{ml/models/baseline\_2/eegnet\_tuned.pth}.
 \end{itemize}
 
 \subsection{Diagnostics Protocol}
@@ -190,7 +203,9 @@ Run D & 3-class with full diagnostics & 0.5000 & Single-class prediction flips a
 Run E & Binary (T1/T2) + sanity probe & 0.5178 & Slight gain, unstable around chance. \\
 Run F & Binary with sampler removed & 0.5378 & Best observed; still oscillatory. \\
 Run G & Binary full fine-tuning (all encoder params) & 0.5222 & Strong overfitting; no stable val gain. \\
-Run H & EEGNetResidual baseline (4-ch, CPU, \texttt{ml/\_\_init\_\_.py}) & 0.5919 & Strongest observed binary validation score. \\
+Run H & EEGNetResidual baseline (4-ch, CPU, \texttt{ml/\_\_init\_\_.py}) & 0.5919 & Strongest cross-subject/non-personalized binary score. \\
+Run I & Muse personal fine-tuning (\texttt{tune\_eegnet\_muse.py}, 4-ch) & 0.9286 & Strong within-user separation on small holdout. \\
+Run J & LaBraM 2-stage (head-only $\rightarrow$ unfreeze last 2; MCC-selected) & 0.5378 & Best LaBraM MCC=0.0753; persistent collapse tendency. \\
 \bottomrule
 \end{longtable}
 
@@ -214,6 +229,24 @@ The full fine-tuning run (all LaBraM encoder parameters trainable) followed the 
 
 This run demonstrates that increasing adaptation capacity alone does not resolve representation-task mismatch in this setting. Compared with Run F ($0.5378$), full fine-tuning produced lower best validation accuracy and weaker stability.
 
+\subsection{Two-Stage LaBraM Adaptation (Run J)}
+The updated two-stage training run used:
+\begin{itemize}
+\item \textbf{Stage 1:} head-only training for 12 epochs.
+\item \textbf{Stage 2:} unfreeze last 2 encoder blocks with low encoder learning rate.
+\item \textbf{Selection rule:} MCC-based early stopping/checkpointing (binary task).
+\end{itemize}
+
+Observed outcomes:
+\begin{itemize}
+\item \textbf{Best MCC:} $0.0753$ at epoch 13 (immediately after stage transition).
+\item \textbf{At best MCC checkpoint:} validation accuracy $0.5378$, balanced accuracy $0.5339$.
+\item \textbf{Early-stop epoch:} 53.
+\item \textbf{Behavior:} prediction histograms still oscillated between near-single-class states (e.g., $[450,0]$, $[0,450]$, and skewed mixtures).
+\end{itemize}
+
+Interpretation: the two-stage policy improved the \emph{selection signal} (MCC) and gave a reproducible best-MCC LaBraM checkpoint, but did not improve top-line validation accuracy beyond prior best LaBraM binary runs ($0.5378$).
+
 \subsection{EEGNetResidual Baseline (Run H, \texttt{ml/\_\_init\_\_.py})}
 The integrated baseline logs report the following setup and outcomes:
 \begin{itemize}
@@ -224,7 +257,23 @@ The integrated baseline logs report the following setup and outcomes:
 \item \textbf{Stop condition:} Early stopping at epoch 273.
 \end{itemize}
 
-Relative to LaBraM adaptation runs, this baseline is higher by $+0.0541$ versus best LaBraM binary run (Run F, $0.5378$) and by $+0.0697$ versus full LaBraM fine-tuning (Run G, $0.5222$). In this project state, a compact task-specific baseline outperforms FM adaptation on the measured binary split.
+Relative to LaBraM adaptation runs, this baseline is higher by $+0.0541$ versus best LaBraM binary validation accuracy (Runs F/J, $0.5378$) and by $+0.0697$ versus full LaBraM fine-tuning (Run G, $0.5222$). In this project state, a compact task-specific baseline outperforms FM adaptation on the measured binary split.
+
+\subsection{Muse Personal Calibration Fine-Tuning (Run I)}
+The new personalization run used:
+\begin{quote}
+\texttt{uv run python tune\_eegnet\_muse.py --epochs 200 --batch-size 16 --learning-rate 1e-4 --freeze-early}
+\end{quote}
+
+Observed outcomes:
+\begin{itemize}
+\item \textbf{Best validation accuracy:} $0.9286$ at epoch 36.
+\item \textbf{Final epoch (200):} train loss $0.1084$, train acc $0.9815$; val loss $0.1838$, val acc $0.9286$.
+\item \textbf{Trajectory:} validation accuracy rose from $0.5000$ (epoch 1) to $0.9286$ by epoch 36, then remained stable while validation loss continued to improve.
+\item \textbf{Data regime:} only 68 epochs total with a 14-epoch validation holdout.
+\end{itemize}
+
+Interpretation: this run provides strong evidence that \emph{within-user} adaptation with the same headset/channel geometry can be very effective. However, because the validation set is small and drawn from the same recording regime, this result should be interpreted as a personalization outcome, not a cross-subject generalization benchmark.
 
 \subsection{Research Questions: Evidence-Based Answers}
 \begin{ansbox}{1}
@@ -236,7 +285,7 @@ Relative to LaBraM adaptation runs, this baseline is higher by $+0.0541$ versus 
 \end{ansbox}
 
 \begin{ansbox}{3}
-\textbf{RQ3 (intervention effectiveness)}: interventions provided incremental but limited improvements. Binary decomposition and removal of weighted sampling improved best observed validation performance (to 0.5378), but did not eliminate oscillatory near-chance behavior or class collapse. Unfreezing 2 or 4 encoder blocks did not provide clear gains over freezing in 3-class mode, and full fine-tuning reached near-perfect train accuracy without validation improvement (best 0.5222). The external EEGNetResidual baseline reached 0.5919 on the same left-vs-right objective, indicating that current FM-side interventions are still below an achievable task-specific baseline. Overall, optimization interventions changed the \emph{surface behavior} of runs (which class was preferred at a given epoch) more than the \emph{underlying separability} of the task.
+\textbf{RQ3 (intervention effectiveness)}: interventions behaved differently across regimes. For cross-subject FM adaptation, improvements remained incremental (best LaBraM binary validation accuracy 0.5378; full fine-tuning 0.5222) with persistent collapse dynamics. The two-stage LaBraM policy improved MCC-based selection quality (best MCC 0.0753) but did not raise headline validation accuracy beyond prior LaBraM best. For compact task-specific models, the EEGNetResidual baseline reached 0.5919 on the larger PhysioNet split. For within-user personalization, Muse calibration fine-tuning reached 0.9286 on a small holdout, showing that targeted user adaptation can materially improve practical control performance. Overall, intervention impact is therefore \emph{regime-dependent}: weak-to-moderate for current FM transfer, moderate for generic compact baselines, and strong for same-user calibration.
 \end{ansbox}
 
 \subsection{Sampler Incident}
@@ -247,19 +296,19 @@ A validation-loader indexing failure occurred during sampler integration:
 The full traceback is preserved in Appendix~\ref{appendix:rawlogs}.
 
 \section{Discussion}
-The experiments indicate that straightforward FM adaptation (probing, partial unfreezing, or full fine-tuning) did not resolve the downstream MI separation problem in this pipeline. The negative result is still informative: it isolates failure behavior at the interface between pre-trained representation and downstream task structure.
+The experiments indicate that straightforward FM adaptation (probing, partial unfreezing, full fine-tuning, and two-stage unfreezing) did not resolve the downstream MI separation problem in the cross-subject setting. The negative result is still informative: it isolates failure behavior at the interface between pre-trained representation and downstream task structure.
 
-The integrated EEGNetResidual log provides an important anchor: a compact task-specific model reached a higher validation score (0.5919) than all tested LaBraM variants in this report. This does not invalidate FM approaches; instead, it clarifies present engineering priorities. Before claiming transfer benefits, the FM pipeline should at minimum match strong compact baselines under identical split and preprocessing protocols.
+The integrated EEGNetResidual log provides an important anchor: a compact task-specific model reached a higher validation score (0.5919) than all tested LaBraM variants in this report. The new Muse calibration run further shows that this compact family can be strongly personalized (0.9286 on a small within-user holdout). This does not invalidate FM approaches; instead, it clarifies present engineering priorities. Before claiming transfer benefits, the FM pipeline should at minimum match strong compact baselines under identical split and preprocessing protocols, and then be compared against personalized baselines under controlled same-user evaluation.
 
 From a systems perspective, the central promise of this line of work remains important: if representation and classification can be cleanly decoupled, deployment cost decreases and channel-configuration flexibility increases. The current evidence shows that achieving this in practice likely requires additional alignment between pre-training assumptions and downstream MI conditions (e.g., temporal context, channel semantics, and task-specific adaptation protocol).
 
 \section{Conclusion}
-This paper provides a reproducible baseline for LaBraM-based MI adaptation under realistic constraints. Across all shared runs, multiclass behavior remained near chance and binary behavior improved only modestly, with persistent class-collapse dynamics. Full fine-tuning increased optimization capacity but mainly produced overfitting rather than robust validation gains. An integrated EEGNetResidual baseline log achieved 0.5919 and currently outperformed all tested LaBraM settings. The report therefore clarifies a concrete open problem: building FM-based EEG pipelines that are simultaneously (i) representation/classifier decoupled, (ii) robust to variable channel configurations, and (iii) competitive with task-specific baselines on downstream MI performance.
+This paper provides a reproducible baseline for LaBraM-based MI adaptation under realistic constraints. Across shared cross-subject runs, multiclass behavior remained near chance and binary behavior improved only modestly, with persistent class-collapse dynamics. Full FM fine-tuning increased optimization capacity but mainly produced overfitting rather than robust validation gains, while two-stage training improved MCC-based checkpointing without increasing best validation accuracy. An integrated EEGNetResidual baseline achieved 0.5919, and a new Muse personalization run achieved 0.9286 on a small within-user holdout, indicating high practical upside for user-specific calibration. The report therefore clarifies the current frontier: building FM-based EEG pipelines that are simultaneously (i) representation/classifier decoupled, (ii) robust to variable channel configurations, and (iii) competitive with both cross-subject and personalized compact baselines.
 
 \section{Reproducibility, Data, and Code Availability}
-\textbf{Code.} Experiment scripts and logs are archived in the project repository.
+\textbf{Code.} Experiment scripts and logs are archived in the project repository. The personalization script introduced in this revision is \texttt{ml/tune\_eegnet\_muse.py}.
 
-\textbf{Data.} Class counts and run settings are reported directly from training logs; full raw logs are included in Appendix~\ref{appendix:rawlogs}.
+\textbf{Data.} Class counts and run settings are reported directly from training logs; full raw logs are included in Appendix~\ref{appendix:rawlogs}. Muse personalization used local captures under \texttt{ml/calibration\_data/}.
 
 \textbf{Environment.} Training and debugging were conducted in notebook and script environments with PyTorch-based implementation \citep{paszke2019pytorch}.
 

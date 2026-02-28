@@ -32,6 +32,9 @@ const PROGRESS_TICK_MS = 120;
 const DEFAULT_STRESS_LEVEL = 0.24;
 const INITIAL_OPPONENT_DIFFICULTY = 0.5;
 const OPPONENT_DEBUG = import.meta.env.DEV;
+const EEG_WS_INTERVAL_MS = 120;
+const EEG_COMMAND_HOLD_MS = 900;
+const EEG_MIN_CONFIDENCE = 56;
 
 const createRuntimeState = (): RuntimeState => ({
   width: 960,
@@ -159,6 +162,8 @@ export default function PongPage() {
   const runtimeRef = useRef<RuntimeState>(createRuntimeState());
   const pausedRef = useRef(false);
   const miSocketRef = useRef<WebSocket | null>(null);
+  const eegHoldTimerRef = useRef<number | null>(null);
+  const eegCommandHoldUntilRef = useRef(0);
   const calibrationRunIdRef = useRef(0);
   const opponentDifficultyRef = useRef(INITIAL_OPPONENT_DIFFICULTY);
   const opponentEventCounterRef = useRef(0);
@@ -192,6 +197,11 @@ export default function PongPage() {
     (sendStop: boolean) => {
       const ws = miSocketRef.current;
       miSocketRef.current = null;
+      if (eegHoldTimerRef.current !== null) {
+        window.clearTimeout(eegHoldTimerRef.current);
+        eegHoldTimerRef.current = null;
+      }
+      eegCommandHoldUntilRef.current = 0;
       if (ws && ws.readyState === WebSocket.OPEN && sendStop) {
         ws.send(JSON.stringify({ action: "stop" }));
       }
@@ -203,6 +213,21 @@ export default function PongPage() {
     },
     [publishDebug],
   );
+
+  const applyEegCommand = useCallback((command: PaddleCommand) => {
+    setEegCommand(command);
+    const holdUntil = performance.now() + EEG_COMMAND_HOLD_MS;
+    eegCommandHoldUntilRef.current = holdUntil;
+    if (eegHoldTimerRef.current !== null) {
+      window.clearTimeout(eegHoldTimerRef.current);
+    }
+    eegHoldTimerRef.current = window.setTimeout(() => {
+      if (performance.now() >= eegCommandHoldUntilRef.current) {
+        setEegCommand("none");
+      }
+      eegHoldTimerRef.current = null;
+    }, EEG_COMMAND_HOLD_MS + 40);
+  }, []);
 
   const resetRuntime = useCallback(() => {
     Object.assign(runtimeRef.current, createRuntimeState());
@@ -360,7 +385,7 @@ export default function PongPage() {
       }, 8000);
 
       ws.onopen = () => {
-        ws.send(JSON.stringify({ action: "start", interval_ms: 1000, reset: true }));
+        ws.send(JSON.stringify({ action: "start", interval_ms: EEG_WS_INTERVAL_MS, reset: true }));
       };
 
       ws.onmessage = (event) => {
@@ -369,6 +394,7 @@ export default function PongPage() {
           type?: string;
           error?: string;
           command?: string;
+          confidence?: number;
         };
 
         if (payload.error) {
@@ -391,7 +417,20 @@ export default function PongPage() {
         }
 
         if (payload.type === "prediction") {
-          setEegCommand(mapCommandToPaddle(payload.command));
+          const nextCommand = mapCommandToPaddle(payload.command);
+          const confidence = Number(payload.confidence ?? 0);
+
+          if (nextCommand !== "none") {
+            if (Number.isFinite(confidence) && confidence > 0 && confidence < EEG_MIN_CONFIDENCE) {
+              return;
+            }
+            applyEegCommand(nextCommand);
+            return;
+          }
+
+          if (performance.now() >= eegCommandHoldUntilRef.current) {
+            setEegCommand("none");
+          }
         }
       };
 
@@ -414,7 +453,7 @@ export default function PongPage() {
         }
       };
     });
-  }, [publishDebug, teardownMiSocket]);
+  }, [applyEegCommand, publishDebug, teardownMiSocket]);
 
   const waitWithProgress = useCallback(async (durationMs: number, start: number, end: number) => {
     const startedAt = performance.now();

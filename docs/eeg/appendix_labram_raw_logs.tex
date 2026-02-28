@@ -69,6 +69,56 @@ Training complete. Best val acc: 0.5919
 \end{verbatim}
 \normalsize
 
+\subsection{Run J: LaBraM 2-Stage Training Log Excerpt (Head-Only \texorpdfstring{$\rightarrow$}{->} Unfreeze Last 2)}
+\scriptsize
+\begin{verbatim}
+Epoch 001/200 | Train loss=1.5078 acc=0.5014 | Val loss=1.3430 acc=0.5089
+  Val true counts=[229, 221] pred counts=[450, 0]
+  Val per-class acc=[1.0, 0.0]
+  Val bal_acc=0.5000 val_mcc=0.0000
+  Selection metric (mcc)=0.0000 | stage=stage1_head_only
+
+Epoch 005/200 | Train loss=0.8139 acc=0.5009 | Val loss=0.6943 acc=0.5111
+  Val true counts=[229, 221] pred counts=[95, 355]
+  Val per-class acc=[0.22707423567771912, 0.8054298758506775]
+  Val bal_acc=0.5163 val_mcc=0.0398
+  Selection metric (mcc)=0.0398 | stage=stage1_head_only
+
+Epoch 012/200 | Train loss=0.7374 acc=0.4957 | Val loss=0.6936 acc=0.5067
+  Val true counts=[229, 221] pred counts=[383, 67]
+  Val per-class acc=[0.8515284061431885, 0.1493212729692459]
+  Val bal_acc=0.5004 val_mcc=0.0012
+  Selection metric (mcc)=0.0012 | stage=stage1_head_only
+
+  Stage switch at epoch 13: stage2_unfreeze_last_2 | Trainable params head=51,970 encoder=966,160
+  Optimizer LRs | head=5e-05 encoder=5e-06 weight_decay=0.0001
+
+Epoch 013/200 | Train loss=0.7294 acc=0.5077 | Val loss=0.6937 acc=0.5378
+  Val true counts=[229, 221] pred counts=[323, 127]
+  Val per-class acc=[0.751091718673706, 0.31674209237098694]
+  Val bal_acc=0.5339 val_mcc=0.0753
+  Selection metric (mcc)=0.0753 | stage=stage2_unfreeze_last_2
+  New best (mcc=0.0753, val_acc=0.5378)
+
+Epoch 030/200 | Train loss=0.7056 acc=0.4963 | Val loss=0.6941 acc=0.5244
+  Val true counts=[229, 221] pred counts=[249, 201]
+  Val per-class acc=[0.5764192342758179, 0.47058823704719543]
+  Val bal_acc=0.5235 val_mcc=0.0473
+  Selection metric (mcc)=0.0473 | stage=stage2_unfreeze_last_2
+
+Epoch 053/200 | Train loss=0.6956 acc=0.5117 | Val loss=0.6938 acc=0.5111
+  Val true counts=[229, 221] pred counts=[303, 147]
+  Val per-class acc=[0.6812227368354797, 0.33484163880348206]
+  Val bal_acc=0.5080 val_mcc=0.0171
+  Selection metric (mcc)=0.0171 | stage=stage2_unfreeze_last_2
+
+Early stopping at epoch 53.
+
+Training complete. Best mcc: 0.0753 | Best val_acc: 0.5378 |
+Best val_bal_acc: 0.5339 | Best val_mcc: 0.0753
+\end{verbatim}
+\normalsize
+
 \subsection{Run B/C: Partial Unfreeze (2 blocks and 4 blocks)}
 \scriptsize
 \begin{verbatim}
