@@ -6,8 +6,8 @@ const createRuntimeState = (overrides?: Partial<RuntimeState>): RuntimeState => 
   width: 960,
   height: 540,
   ball: { x: 480, y: 270, radius: 10 },
-  leftPaddle: { x: 20, y: 215, width: 14, height: 110 },
-  rightPaddle: { x: 926, y: 215, width: 14, height: 110 },
+  topPaddle: { x: 425, y: 20, width: 110, height: 14 },      // Player at top
+  bottomPaddle: { x: 425, y: 506, width: 110, height: 14 },  // AI at bottom
   playerScore: 0,
   aiScore: 0,
   ...(overrides ?? {}),
@@ -46,22 +46,25 @@ describe("pong physics step", () => {
   });
 
   it("inverts ball velocity only on wall/paddle contacts", () => {
-    const topState = createRuntimeState({
-      ball: { x: 480, y: 1, radius: 10 },
+    // Test left wall collision (ball bounces off left wall)
+    const leftWallState = createRuntimeState({
+      ball: { x: 1, y: 270, radius: 10 },
     });
     const input = neutralInput();
-    const top = stepPongPhysics(topState, input, "paddle", BALL_SPEED_X, -170);
-    expect(top.ballVY).toBeGreaterThan(0);
-    expect(top.metrics.collisionResolvedCount).toBeGreaterThan(0);
-    expect(top.metrics.collisionNormals.some((normal) => normal.x === 0 && normal.y === 1)).toBe(true);
+    const leftWall = stepPongPhysics(leftWallState, input, "paddle", -170, BALL_SPEED_Y);
+    expect(leftWall.ballVX).toBeGreaterThan(0);
+    expect(leftWall.metrics.collisionResolvedCount).toBeGreaterThan(0);
+    expect(leftWall.metrics.collisionNormals.some((normal) => normal.x === 1 && normal.y === 0)).toBe(true);
 
+    // Test top paddle collision (ball moving up hits bottom edge of top paddle)
     const paddleState = createRuntimeState({
-      ball: { x: 44, y: 250, radius: 10 },
+      ball: { x: 480, y: 44, radius: 10 },
+      topPaddle: { x: 425, y: 20, width: 110, height: 14 },
     });
-    const paddleHit = stepPongPhysics(paddleState, input, "paddle", -BALL_SPEED_X, BALL_SPEED_Y);
-    expect(paddleHit.ballVX).toBeGreaterThan(0);
+    const paddleHit = stepPongPhysics(paddleState, input, "paddle", BALL_SPEED_X, -BALL_SPEED_Y);
+    expect(paddleHit.ballVY).toBeGreaterThan(0);
     expect(paddleHit.metrics.collisionResolvedCount).toBeGreaterThan(0);
-    expect(paddleHit.metrics.collisionNormals.some((normal) => normal.x === 1 && normal.y === 0)).toBe(
+    expect(paddleHit.metrics.collisionNormals.some((normal) => normal.x === 0 && normal.y === 1)).toBe(
       true,
     );
   });
@@ -71,8 +74,8 @@ describe("pong physics step", () => {
       width: 15000,
       height: 1200,
       ball: { x: 7500, y: 300, radius: 10 },
-      leftPaddle: { x: 20, y: 450, width: 14, height: 110 },
-      rightPaddle: { x: 14966, y: 450, width: 14, height: 110 },
+      topPaddle: { x: 7445, y: 20, width: 110, height: 14 },
+      bottomPaddle: { x: 7445, y: 1166, width: 110, height: 14 },
     });
 
     let minX = state.ball.x;
@@ -100,13 +103,13 @@ describe("pong physics step", () => {
   it("keeps physics deterministic across repeated runs", () => {
     const stateA = createRuntimeState({
       ball: { x: 300, y: 180, radius: 10 },
-      leftPaddle: { x: 20, y: 500, width: 14, height: 110 },
-      rightPaddle: { x: 926, y: 500, width: 14, height: 110 },
+      topPaddle: { x: 245, y: 20, width: 110, height: 14 },
+      bottomPaddle: { x: 245, y: 506, width: 110, height: 14 },
     });
     const stateB = createRuntimeState({
       ball: { x: 300, y: 180, radius: 10 },
-      leftPaddle: { x: 20, y: 500, width: 14, height: 110 },
-      rightPaddle: { x: 926, y: 500, width: 14, height: 110 },
+      topPaddle: { x: 245, y: 20, width: 110, height: 14 },
+      bottomPaddle: { x: 245, y: 506, width: 110, height: 14 },
     });
     const input = neutralInput();
 

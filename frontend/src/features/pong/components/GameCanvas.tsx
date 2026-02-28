@@ -12,6 +12,7 @@ type GameCanvasProps = {
   onDebugMetrics?: (payload: LoopDebugPayload) => void;
   isPausedRef?: { current: boolean };
   controlMode?: "paddle" | "ball";
+  eegCommand?: "none" | "left" | "right";
 };
 
 export const GameCanvas = ({
@@ -22,6 +23,7 @@ export const GameCanvas = ({
   onDebugMetrics,
   isPausedRef,
   controlMode = "paddle",
+  eegCommand = "none",
 }: GameCanvasProps) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const ctxRef = useRef<CanvasRenderingContext2D | null>(null);
@@ -31,6 +33,7 @@ export const GameCanvas = ({
   const onRuntimeUpdateRef = useRef(onRuntimeUpdate);
   const onDebugMetricsRef = useRef(onDebugMetrics);
   const controlModeRef = useRef(controlMode);
+  const eegCommandRef = useRef<"none" | "left" | "right">(eegCommand);
   const inputRef = useRef<GameInputState>({
     up: false,
     down: false,
@@ -105,6 +108,10 @@ export const GameCanvas = ({
   }, [controlMode]);
 
   useEffect(() => {
+    eegCommandRef.current = eegCommand;
+  }, [eegCommand]);
+
+  useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) {
       return;
@@ -168,6 +175,7 @@ export const GameCanvas = ({
       onDebugMetrics: (value) => onDebugMetricsRef.current?.(value),
       isPausedRef,
       controlModeRef,
+      eegCommandRef,
     });
 
     return stop;

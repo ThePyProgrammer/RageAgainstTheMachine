@@ -1,6 +1,7 @@
 import { SeededRNG } from "./seededRng";
 import type { CombatState, InputSample, SimulationConfig } from "./types";
 import { advanceSimulation } from "./physics";
+import type { Barrier, BarrierBreakEvent } from "./barriers";
 
 export const FRAME_MS = 1000 / 60;
 
@@ -9,11 +10,13 @@ export interface SimulationFrameArgs {
   readonly playerInput: InputSample;
   readonly enemyInput: InputSample;
   readonly dtMs: number;
+  readonly barriers?: Barrier[];
 }
 
 export interface DeterministicStepResult {
   readonly state: CombatState;
   readonly nextTickTimeMs: number;
+  readonly newBreakEvents: BarrierBreakEvent[];
 }
 
 export const createStateFromSeed = (seed: number): CombatState => {
@@ -72,13 +75,15 @@ export const stepSimulation = (
   const playerInput = args.playerInput;
   const enemyInput = args.enemyInput;
 
-  const nextState = advanceSimulation(
+  const advanceResult = advanceSimulation(
     state,
     playerInput,
     enemyInput,
     args.config,
     dt,
+    args.barriers,
   );
+  const nextState = advanceResult.state;
 
   const randomShift = rng.nextSignedRange() * 0.001;
   const nextDifficulty = {
@@ -92,5 +97,6 @@ export const stepSimulation = (
       difficulty: nextDifficulty,
     },
     nextTickTimeMs: state.simTimeMs + args.dtMs,
+    newBreakEvents: advanceResult.newBreakEvents,
   };
 };

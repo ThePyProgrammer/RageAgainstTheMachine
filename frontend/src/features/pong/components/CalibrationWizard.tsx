@@ -1,23 +1,33 @@
 import type { FunctionComponent } from "react";
 
-type Step = "baseline" | "left" | "right" | "complete";
+type Step = "left" | "right" | "fine_tuning" | "complete" | "error";
 
 type CalibrationWizardProps = {
   step: Step;
-  trial: number;
   instruction: string;
   progress: number;
   quality?: number;
+  errorMessage?: string;
+  running: boolean;
   onRetry?: () => void;
-  onContinue: () => void;
+  onContinue?: () => void;
+};
+
+const TITLE_BY_STEP: Record<Step, string> = {
+  left: "Look Left",
+  right: "Look Right",
+  fine_tuning: "Fine-Tuning Classifier",
+  complete: "Calibration Complete",
+  error: "Calibration Failed",
 };
 
 export const CalibrationWizard: FunctionComponent<CalibrationWizardProps> = ({
   step,
-  trial,
   instruction,
   progress,
   quality,
+  errorMessage,
+  running,
   onRetry,
   onContinue,
 }) => {
@@ -27,47 +37,38 @@ export const CalibrationWizard: FunctionComponent<CalibrationWizardProps> = ({
         <div className="h-2 bg-zinc-700 rounded">
           <div
             className="h-full bg-cyan-400 transition-all"
-            style={{ width: `${progress * 100}%` }}
+            style={{ width: `${Math.max(0, Math.min(1, progress)) * 100}%` }}
           />
         </div>
 
-        <h2 className="mt-8 text-2xl font-bold">
-          {step === "baseline" && "Baseline"}
-          {step === "left" && `Left Trial ${trial}`}
-          {step === "right" && `Right Trial ${trial}`}
-          {step === "complete" && "Calibration Complete"}
-        </h2>
-        <p className="text-zinc-300 mt-2">{instruction}</p>
+        <h2 className="mt-8 text-3xl font-bold tracking-tight">{TITLE_BY_STEP[step]}</h2>
+        <p className="text-zinc-200 mt-3 text-lg">{instruction}</p>
 
-        {quality !== undefined && (
-          <p className="mt-4 text-sm text-zinc-300">
-            Quality {quality.toFixed(2)} {quality >= 1 ? "accepted" : "retry suggested"}
+        {running && (
+          <p className="mt-4 text-sm text-cyan-300 animate-pulse">
+            Capturing live EEG data...
           </p>
         )}
 
-        <p className="mt-12 text-xs text-zinc-500">
-          This is a UI demo wizard. No hardware input is required.
-        </p>
+        {typeof quality === "number" && (
+          <p className="mt-4 text-sm text-zinc-300">Best validation accuracy: {(quality * 100).toFixed(1)}%</p>
+        )}
 
-        <div className="mt-8 flex gap-3">
-          {step === "complete" ? (
-            <>
-              {onRetry && (
-                <button
-                  type="button"
-                  className="rounded border border-yellow-500 px-4 py-2"
-                  onClick={onRetry}
-                >
-                  Retry
-                </button>
-              )}
-              <button type="button" className="rounded bg-cyan-500 px-4 py-2" onClick={onContinue}>
-                Continue
-              </button>
-            </>
-          ) : (
-            <button type="button" className="rounded bg-cyan-500 px-4 py-2" onClick={onContinue}>
-              {step === "baseline" ? "Start" : "Next"}
+        {errorMessage && <p className="mt-4 text-sm text-rose-300">{errorMessage}</p>}
+
+        <div className="mt-10 flex gap-3">
+          {!running && onRetry && (
+            <button
+              type="button"
+              className="rounded border border-yellow-500 px-4 py-2 hover:bg-yellow-500/10"
+              onClick={onRetry}
+            >
+              Retry
+            </button>
+          )}
+          {!running && onContinue && (
+            <button type="button" className="rounded bg-cyan-500 px-4 py-2 text-black" onClick={onContinue}>
+              Continue
             </button>
           )}
         </div>

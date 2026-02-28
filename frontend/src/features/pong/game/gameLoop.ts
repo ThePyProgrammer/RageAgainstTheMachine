@@ -13,13 +13,14 @@ export interface LoopConfig {
   isPausedRef?: { current: boolean };
   controlMode?: "paddle" | "ball";
   controlModeRef?: { current: "paddle" | "ball" };
+  eegCommandRef?: { current: "none" | "left" | "right" };
 }
 
 export const FRAME_MS = 1000 / 60;
 export const PADDLE_SPEED = 260;
 const PONG_INITIAL_SPEED = 0.5; // PONG INITIAL SPEED: 50% of current tuned speed
-export const BALL_SPEED_X = 320 * PONG_INITIAL_SPEED;
-export const BALL_SPEED_Y = 220 * PONG_INITIAL_SPEED;
+export const BALL_SPEED_X = 220 * PONG_INITIAL_SPEED;  // Secondary (lateral movement)
+export const BALL_SPEED_Y = 320 * PONG_INITIAL_SPEED;  // Primary (vertical movement)
 
 const clamp = (value: number, min: number, max: number): number =>
   Math.min(max, Math.max(min, value));
@@ -55,16 +56,17 @@ interface StepResult {
   metrics: StepMetrics;
 }
 
-const resetBall = (runtimeState: RuntimeState, previousBallVY: number, direction: number): {
+const resetBall = (runtimeState: RuntimeState, previousBallVX: number, direction: number): {
   ballVX: number;
   ballVY: number;
 } => {
   runtimeState.ball.x = runtimeState.width / 2;
   runtimeState.ball.y = runtimeState.height / 2;
 
+  // Ball travels vertically: direction controls Y, X is secondary
   return {
-    ballVX: BALL_SPEED_X * direction,
-    ballVY: BALL_SPEED_Y * Math.sign(previousBallVY || 1),
+    ballVX: BALL_SPEED_X * Math.sign(previousBallVX || 1),
+    ballVY: BALL_SPEED_Y * direction,
   };
 };
 
@@ -82,38 +84,45 @@ export const stepPongPhysics = (
   let collisionResolvedCount = 0;
   const collisionNormals: CollisionNormal[] = [];
 
+  // Player paddle movement: horizontal (left/right keys affect topPaddle.x)
+  // Also allow up/down keys to move paddle left/right for convenience
   if (controlMode === "paddle") {
-    runtimeState.leftPaddle.y +=
-      ((inputState.down ? 1 : 0) - (inputState.up ? 1 : 0)) * PADDLE_SPEED * (FRAME_MS / 1000);
+    const moveLeft = inputState.left || inputState.up;
+    const moveRight = inputState.right || inputState.down;
+    runtimeState.topPaddle.x +=
+      ((moveRight ? 1 : 0) - (moveLeft ? 1 : 0)) * PADDLE_SPEED * (FRAME_MS / 1000);
   }
 
-  const rightTarget = runtimeState.ball.y - runtimeState.rightPaddle.height / 2;
-  const rightDelta = rightTarget - runtimeState.rightPaddle.y;
-  const rightUnclampedY = runtimeState.rightPaddle.y + clamp(rightDelta, -180, 180) * 0.03;
-  const rightNextY = clamp(
-    rightUnclampedY,
+  // AI tracks ball.x and moves bottomPaddle.x
+  const bottomTarget = runtimeState.ball.x - runtimeState.bottomPaddle.width / 2;
+  const bottomDelta = bottomTarget - runtimeState.bottomPaddle.x;
+  const bottomUnclampedX = runtimeState.bottomPaddle.x + clamp(bottomDelta, -180, 180) * 0.03;
+  const bottomNextX = clamp(
+    bottomUnclampedX,
     0,
-    runtimeState.height - runtimeState.rightPaddle.height,
+    runtimeState.width - runtimeState.bottomPaddle.width,
   );
-  if (rightNextY !== rightUnclampedY) {
+  if (bottomNextX !== bottomUnclampedX) {
     positionClampedCount += 1;
   }
-  if (rightNextY !== runtimeState.rightPaddle.y) {
-    runtimeState.rightPaddle.y = rightNextY;
+  if (bottomNextX !== runtimeState.bottomPaddle.x) {
+    runtimeState.bottomPaddle.x = bottomNextX;
   }
 
-  const leftNextY = clamp(
-    runtimeState.leftPaddle.y,
+  // Clamp player paddle X position
+  const topNextX = clamp(
+    runtimeState.topPaddle.x,
     0,
-    runtimeState.height - runtimeState.leftPaddle.height,
+    runtimeState.width - runtimeState.topPaddle.width,
   );
-  if (leftNextY !== runtimeState.leftPaddle.y) {
+  if (topNextX !== runtimeState.topPaddle.x) {
     positionClampedCount += 1;
   }
-  if (leftNextY !== runtimeState.leftPaddle.y) {
-    runtimeState.leftPaddle.y = leftNextY;
+  if (topNextX !== runtimeState.topPaddle.x) {
+    runtimeState.topPaddle.x = topNextX;
   }
 
+  // Ball movement
   if (controlMode === "ball") {
     const keyX = (inputState.right ? 1 : 0) - (inputState.left ? 1 : 0);
     const keyY = (inputState.down ? 1 : 0) - (inputState.up ? 1 : 0);
@@ -134,56 +143,60 @@ export const stepPongPhysics = (
     runtimeState.ball.y += ballVY * (FRAME_MS / 1000);
   }
 
-  if (runtimeState.ball.y - runtimeState.ball.radius <= 0) {
-    ballVY *= -1;
-    collisionResolvedCount += 1;
-    collisionNormals.push({ x: 0, y: 1 });
-  } else if (runtimeState.ball.y + runtimeState.ball.radius >= runtimeState.height) {
-    ballVY *= -1;
-    collisionResolvedCount += 1;
-    collisionNormals.push({ x: 0, y: -1 });
-  }
-
-  const nextBallX = runtimeState.ball.x;
-  const nextBallY = runtimeState.ball.y;
-  const lp = runtimeState.leftPaddle;
-  const rp = runtimeState.rightPaddle;
+  // Wall bouncing: ball bounces off LEFT and RIGHT walls
   const radius = runtimeState.ball.radius;
-
-  if (
-    ballVX < 0 &&
-    nextBallX - radius <= lp.x + lp.width &&
-    nextBallX >= lp.x + lp.width &&
-    nextBallY >= lp.y &&
-    nextBallY <= lp.y + lp.height
-  ) {
-    ballVX *= -1.06;
-    runtimeState.ball.x = lp.x + lp.width + radius + 1;
+  if (runtimeState.ball.x - radius <= 0) {
+    ballVX *= -1;
     collisionResolvedCount += 1;
     collisionNormals.push({ x: 1, y: 0 });
-  }
-
-  if (
-    ballVX > 0 &&
-    nextBallX + radius >= rp.x &&
-    nextBallX - radius <= rp.x + rp.width &&
-    nextBallY >= rp.y &&
-    nextBallY <= rp.y + rp.height
-  ) {
-    ballVX *= -1.06;
-    runtimeState.ball.x = rp.x - radius - 1;
+  } else if (runtimeState.ball.x + radius >= runtimeState.width) {
+    ballVX *= -1;
     collisionResolvedCount += 1;
     collisionNormals.push({ x: -1, y: 0 });
   }
 
-  if (runtimeState.ball.x < -radius) {
+  const nextBallX = runtimeState.ball.x;
+  const nextBallY = runtimeState.ball.y;
+  const tp = runtimeState.topPaddle;
+  const bp = runtimeState.bottomPaddle;
+
+  // Top paddle collision: ball moving up (ballVY < 0), hits bottom edge of top paddle
+  if (
+    ballVY < 0 &&
+    nextBallY - radius <= tp.y + tp.height &&
+    nextBallY + radius >= tp.y &&
+    nextBallX >= tp.x &&
+    nextBallX <= tp.x + tp.width
+  ) {
+    ballVY *= -1.06;
+    runtimeState.ball.y = tp.y + tp.height + radius + 1;
+    collisionResolvedCount += 1;
+    collisionNormals.push({ x: 0, y: 1 });
+  }
+
+  // Bottom paddle collision: ball moving down (ballVY > 0), hits top edge of bottom paddle
+  if (
+    ballVY > 0 &&
+    nextBallY + radius >= bp.y &&
+    nextBallY - radius <= bp.y + bp.height &&
+    nextBallX >= bp.x &&
+    nextBallX <= bp.x + bp.width
+  ) {
+    ballVY *= -1.06;
+    runtimeState.ball.y = bp.y - radius - 1;
+    collisionResolvedCount += 1;
+    collisionNormals.push({ x: 0, y: -1 });
+  }
+
+  // Scoring: ball exits top (AI scores) or bottom (player scores)
+  if (runtimeState.ball.y < -radius) {
     runtimeState.aiScore += 1;
     scoreSide = "ai";
-    ({ ballVX, ballVY } = resetBall(runtimeState, ballVY, -1));
-  } else if (runtimeState.ball.x > runtimeState.width + radius) {
+    ({ ballVX, ballVY } = resetBall(runtimeState, ballVX, -1));
+  } else if (runtimeState.ball.y > runtimeState.height + radius) {
     runtimeState.playerScore += 1;
     scoreSide = "player";
-    ({ ballVX, ballVY } = resetBall(runtimeState, ballVY, 1));
+    ({ ballVX, ballVY } = resetBall(runtimeState, ballVX, 1));
   }
 
   return {
@@ -210,6 +223,7 @@ export const createPongLoop = (cfg: LoopConfig) => {
     isPausedRef,
     controlMode = "paddle",
     controlModeRef,
+    eegCommandRef,
   } = cfg;
 
   const getControlMode = () => controlModeRef?.current ?? controlMode;
@@ -267,7 +281,13 @@ export const createPongLoop = (cfg: LoopConfig) => {
     while (accumulator >= FRAME_MS) {
       const stepResult = stepPongPhysics(
         runtimeState,
-        inputRef.current,
+        {
+          ...inputRef.current,
+          left:
+            inputRef.current.left || eegCommandRef?.current === "left",
+          right:
+            inputRef.current.right || eegCommandRef?.current === "right",
+        },
         getControlMode(),
         ballVX,
         ballVY,

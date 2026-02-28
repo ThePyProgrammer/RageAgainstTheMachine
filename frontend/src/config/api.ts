@@ -30,6 +30,13 @@ export const API_ENDPOINTS = {
   MI_CONFIGURE: `${API_BASE_URL}/bci/motor_imagery/configure`,
   MI_LATEST: `${API_BASE_URL}/bci/motor_imagery/latest`,
   MI_WS: `${WS_BASE_URL}/mi/ws`,
+  MI_CALIBRATION_START: `${API_BASE_URL}/mi/calibration/start`,
+  MI_CALIBRATION_TRIAL_START: `${API_BASE_URL}/mi/calibration/trial/start`,
+  MI_CALIBRATION_TRIAL_END: `${API_BASE_URL}/mi/calibration/trial/end`,
+  MI_CALIBRATION_END: `${API_BASE_URL}/mi/calibration/end`,
+  MI_FINETUNE_PREPARE: `${API_BASE_URL}/mi/finetune/prepare`,
+  MI_FINETUNE_RUN: `${API_BASE_URL}/mi/finetune/run`,
+  MI_FINETUNE_SAVE: `${API_BASE_URL}/mi/finetune/save`,
 
   // AI Opponent
   OPPONENT_WS: `${WS_BASE_URL}/opponent/ws`,

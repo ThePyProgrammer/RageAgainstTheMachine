@@ -55,7 +55,7 @@ export const createPatternTile = ({
       const x = rand() * size;
       const y = rand() * size;
       const radius = 1.5 + rand() * 2.5;
-      ctx.globalAlpha = 0.35 + rand() * 0.45;
+      ctx.globalAlpha = 0.55 + rand() * 0.45;
       ctx.beginPath();
       ctx.arc(x, y, radius, 0, Math.PI * 2);
       ctx.fill();
@@ -66,11 +66,11 @@ export const createPatternTile = ({
   if (pattern === "rings") {
     const stroke = secondary;
     ctx.strokeStyle = stroke;
-    ctx.lineWidth = 1;
+    ctx.lineWidth = 1.5;
     const rings = 6;
     for (let i = 1; i <= rings; i++) {
       const r = (size / (rings + 1)) * i;
-      ctx.globalAlpha = clamp(1 - i / (rings + 2), 0.18, 0.9);
+      ctx.globalAlpha = clamp(1 - i / (rings + 2), 0.3, 0.95);
       ctx.beginPath();
       ctx.arc(cx, cy, r, 0, Math.PI * 2);
       ctx.stroke();
@@ -80,10 +80,11 @@ export const createPatternTile = ({
 
   if (pattern === "stripes") {
     ctx.strokeStyle = secondary;
-    ctx.lineWidth = 3;
+    ctx.lineWidth = 3.5;
     const step = 10;
     for (let x = -size; x < size * 2; x += step) {
       const offset = Math.floor((rand() - 0.5) * 2);
+      ctx.globalAlpha = 0.7 + rand() * 0.3;
       ctx.beginPath();
       ctx.moveTo(x + offset, size);
       ctx.lineTo(x + size + offset, 0);
@@ -114,15 +115,24 @@ export const createPatternTile = ({
     return tile;
   }
 
-  // moire fallback
+  // moire fallback — high contrast concentric rings with offset overlay
   ctx.fillStyle = secondary;
-  ctx.globalAlpha = 0.15;
-  for (let r = 4; r < size; r += 6) {
+  ctx.globalAlpha = 0.25;
+  for (let r = 4; r < size; r += 5) {
     ctx.beginPath();
     ctx.arc(cx, cy, r, 0, Math.PI * 2);
-    ctx.strokeStyle = r % 12 === 0 ? primary : secondary;
-    ctx.lineWidth = r % 2 === 0 ? 1 : 1.2;
-    ctx.globalAlpha = r % 12 === 0 ? 0.35 : 0.18;
+    ctx.strokeStyle = r % 10 === 0 ? primary : secondary;
+    ctx.lineWidth = r % 2 === 0 ? 1.5 : 1.8;
+    ctx.globalAlpha = r % 10 === 0 ? 0.6 : 0.35;
+    ctx.stroke();
+  }
+  // second offset ring set for moire interference
+  for (let r = 6; r < size; r += 5) {
+    ctx.beginPath();
+    ctx.arc(cx + 8, cy + 6, r, 0, Math.PI * 2);
+    ctx.strokeStyle = secondary;
+    ctx.lineWidth = 1;
+    ctx.globalAlpha = 0.2;
     ctx.stroke();
   }
   return tile;

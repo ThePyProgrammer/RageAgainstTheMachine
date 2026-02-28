@@ -58,6 +58,10 @@ class EEGStreamer:
         self.mi_processor = None
         self.enable_mi = False
 
+        # Calibration processor for collecting labeled MI epochs
+        self.calibration_processor = None
+        self.enable_calibration = False
+
     def start(self):
         if self.is_running:
             return False, "already_running"
@@ -164,6 +168,10 @@ class EEGStreamer:
                 # Feed data to MI processor if enabled
                 if self.enable_mi and self.mi_processor:
                     self.mi_processor.add_samples(filtered_chunk)
+
+                # Feed data to calibration processor if enabled
+                if self.enable_calibration and self.calibration_processor:
+                    self.calibration_processor.add_samples(filtered_chunk)
 
                 # Save RAW only
                 rows = self.data_processor.process_batch(

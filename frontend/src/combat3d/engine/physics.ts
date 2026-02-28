@@ -1,5 +1,6 @@
 import { clamp } from "@ragemachine/bci-shared";
 import type { CombatState, InputSample, SimulationConfig } from "./types";
+import { resolveBarrierCollision, resolveProjectileBarrierHits, type Barrier, type BarrierBreakEvent } from "./barriers";
 
 const WORLD_HALF = 50;
 
@@ -66,7 +67,23 @@ const spawnProjectile = (vehicle: CombatState["player"], owner: "player" | "enem
   owner,
 });
 
-const updateProjectiles = (projectiles: CombatState["projectiles"], state: CombatState, config: SimulationConfig, dt: number): CombatState["projectiles"] => {
+interface ProjectileResult {
+  projectiles: CombatState["projectiles"];
+  playerHits: number;
+  enemyHits: number;
+}
+
+const HIT_RADIUS_SQ = 4; // distance² threshold for hit detection
+
+const updateProjectiles = (
+  projectiles: CombatState["projectiles"],
+  state: CombatState,
+  config: SimulationConfig,
+  dt: number,
+): ProjectileResult => {
+  let playerHits = 0;
+  let enemyHits = 0;
+
   const updated = projectiles
     .map((projectile) => ({
       ...projectile,
@@ -77,19 +94,29 @@ const updateProjectiles = (projectiles: CombatState["projectiles"], state: Comba
     .filter((projectile) => projectile.ttlMs > 0);
 
   if (updated.length === 0) {
-    return updated;
+    return { projectiles: updated, playerHits: 0, enemyHits: 0 };
   }
 
-  const filtered = updated.filter((projectile) => {
-    const enemy = projectile.owner === "player" ? state.enemy : state.player;
-    const distX = enemy.x - projectile.x;
-    const distY = enemy.y - projectile.y;
+  const surviving = updated.filter((projectile) => {
+    const target = projectile.owner === "player" ? state.enemy : state.player;
+    const distX = target.x - projectile.x;
+    const distY = target.y - projectile.y;
     const distSq = distX * distX + distY * distY;
-    return distSq > 2;
+    if (distSq <= HIT_RADIUS_SQ) {
+      if (projectile.owner === "player") playerHits++;
+      else enemyHits++;
+      return false; // remove projectile on hit
+    }
+    return true;
   });
 
-  return filtered;
+  return { projectiles: surviving, playerHits, enemyHits };
 };
+
+export interface AdvanceResult {
+  state: CombatState;
+  newBreakEvents: BarrierBreakEvent[];
+}
 
 export const advanceSimulation = (
   current: CombatState,
@@ -97,9 +124,19 @@ export const advanceSimulation = (
   enemyInput: InputSample,
   config: SimulationConfig,
   dt: number,
-): CombatState => {
-  const nextPlayer = integrateVehicle(current.player, playerInput, config, dt);
-  const nextEnemy = integrateVehicle(current.enemy, enemyInput, config, dt);
+  barriers?: Barrier[],
+): AdvanceResult => {
+  let nextPlayer = integrateVehicle(current.player, playerInput, config, dt);
+  let nextEnemy = integrateVehicle(current.enemy, enemyInput, config, dt);
+
+  // ── Barrier collision (blocks vehicles, no damage) ──
+  const breakEvents: BarrierBreakEvent[] = [];
+  if (barriers && barriers.length > 0) {
+    const pResolved = resolveBarrierCollision(nextPlayer.x, nextPlayer.y, barriers);
+    nextPlayer = { ...nextPlayer, x: pResolved.x, y: pResolved.y };
+    const eResolved = resolveBarrierCollision(nextEnemy.x, nextEnemy.y, barriers);
+    nextEnemy = { ...nextEnemy, x: eResolved.x, y: eResolved.y };
+  }
 
   const nextProjectiles: CombatState["projectiles"] = [...current.projectiles];
 
@@ -111,7 +148,7 @@ export const advanceSimulation = (
     nextProjectiles.push(spawnProjectile(nextEnemy, "enemy", config));
   }
 
-  const movedProjectiles = updateProjectiles(
+  const projectileResult = updateProjectiles(
     nextProjectiles.map((projectile) => ({
       ...projectile,
     })),
@@ -119,6 +156,13 @@ export const advanceSimulation = (
     config,
     dt,
   );
+
+  // ── Projectile-barrier hits (damages barriers, consumes bullet) ──
+  let finalProjectiles = projectileResult.projectiles;
+  if (barriers && barriers.length > 0) {
+    const simTimeMs = current.simTimeMs + dt * 1000;
+    finalProjectiles = resolveProjectileBarrierHits(finalProjectiles, barriers, simTimeMs, breakEvents);
+  }
 
   const playerCooldown = Math.max(0, (playerInput.fire ? 220 : current.player.cooldownMs) - dt * 1000);
   const enemyCooldown = Math.max(0, (enemyInput.fire ? 220 : current.enemy.cooldownMs) - dt * 1000);
@@ -131,20 +175,26 @@ export const advanceSimulation = (
   };
 
   return {
-    tick: current.tick + 1,
-    simTimeMs: current.simTimeMs + dt * 1000,
-    player: {
-      ...nextPlayer,
-      cooldownMs: playerCooldown,
-      speedBoostMs: 0,
+    state: {
+      tick: current.tick + 1,
+      simTimeMs: current.simTimeMs + dt * 1000,
+      player: {
+        ...nextPlayer,
+        cooldownMs: playerCooldown,
+        speedBoostMs: 0,
+      },
+      enemy: {
+        ...nextEnemy,
+        cooldownMs: enemyCooldown,
+        speedBoostMs: 0,
+      },
+      projectiles: finalProjectiles,
+      score: {
+        player: current.score.player + projectileResult.playerHits,
+        enemy: current.score.enemy + projectileResult.enemyHits,
+      },
+      difficulty: nextDifficulty,
     },
-    enemy: {
-      ...nextEnemy,
-      cooldownMs: enemyCooldown,
-      speedBoostMs: 0,
-    },
-    projectiles: movedProjectiles,
-    score: current.score,
-    difficulty: nextDifficulty,
+    newBreakEvents: breakEvents,
   };
 };

@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { RefObject } from "react";
 import { createOpponentInput } from "./ai/difficulty";
 import { CombatView } from "./render/CombatView";
-import { ControlPipeline, createDefaultControlPipeline } from "./bci/controlPipeline";
+import { createDefaultControlPipeline } from "./bci/controlPipeline";
 import {
   FRAME_MS,
   createCombatConfig,
@@ -11,13 +11,15 @@ import {
 } from "./engine";
 import { InputQueue } from "./engine/inputQueue";
 import { SeededRNG } from "./engine/seededRng";
-import { HUD } from "./ui/HUD";
-import { SessionControls } from "./ui/SessionControls";
 import { DebugPanel } from "./debug/DebugPanel";
-import type { BCIStreamPacket, BCIMode } from "@ragemachine/bci-shared";
+import { TauntBubble } from "./ui/TauntBubble";
+import type { BCIStreamPacket } from "@ragemachine/bci-shared";
 import { createCombat3DSocket } from "./net/socket";
 import { type JoinResponse, type TauntPacket, type TelemetryPacket } from "./net/contracts";
 import type { CombatState, InputSample } from "./engine/types";
+import type { BarrierBreakEvent } from "./engine/barriers";
+import { barriersFromObstacles, type Barrier } from "./engine/barriers";
+import { generateObstacles } from "./render/Combat3DScene";
 
 const WS_URL = import.meta.env.VITE_COMBAT3D_WS_URL || "ws://localhost:4001";
 
@@ -55,38 +57,66 @@ const mapTelemetry = (packet: TelemetryPacket): BCIStreamPacket => {
   };
 };
 
-const createFallbackInput = (nowMs: number, event: KeyboardEvent): InputSample => {
-  if (event.key === "ArrowUp") {
-    return { timestamp: nowMs, throttle: 1, turn: 0, fire: false };
-  }
+/* ── Keyboard held-key state ────────────────────────────────────────── */
 
-  if (event.key === "ArrowDown") {
-    return { timestamp: nowMs, throttle: -1, turn: 0, fire: false };
-  }
+const TRACKED_KEYS = new Set([
+  "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight",
+  "w", "W", "a", "A", "s", "S", "d", "D", " ",
+]);
 
-  if (event.key === "ArrowLeft") {
-    return { timestamp: nowMs, throttle: 0, turn: -0.8, fire: false };
-  }
+interface KeyState {
+  up: boolean;
+  down: boolean;
+  left: boolean;
+  right: boolean;
+  fire: boolean;
+}
 
-  if (event.key === "ArrowRight") {
-    return { timestamp: nowMs, throttle: 0, turn: 0.8, fire: false };
-  }
+const createKeyState = (): KeyState => ({
+  up: false, down: false, left: false, right: false, fire: false,
+});
 
-  if (event.key === " ") {
-    return { timestamp: nowMs, throttle: 0, turn: 0, fire: true };
-  }
+/** Sample held-key state into a deterministic InputSample at the given sim time. */
+const sampleKeyboard = (keys: KeyState, simTimeMs: number): InputSample => {
+  let throttle = 0;
+  let turn = 0;
+  if (keys.up) throttle += 1;
+  if (keys.down) throttle -= 1;
+  if (keys.left) turn -= 0.8;
+  if (keys.right) turn += 0.8;
+  return { timestamp: simTimeMs, throttle, turn, fire: keys.fire };
+};
 
-  return { timestamp: nowMs, throttle: 0, turn: 0, fire: false };
+/** Returns true if any movement/fire key is currently held. */
+const hasActiveInput = (keys: KeyState): boolean =>
+  keys.up || keys.down || keys.left || keys.right || keys.fire;
+
+export interface DebugState {
+  queueLen: number;
+  rttMs: number;
+  lastInput: { throttle: number; turn: number; fire: boolean; source: string };
+  playerPos: { x: number; y: number; yaw: number };
+  projectileCount: number;
+  lastEvent: string;
+  tick: number;
+}
+
+const INITIAL_DEBUG: DebugState = {
+  queueLen: 0,
+  rttMs: 0,
+  lastInput: { throttle: 0, turn: 0, fire: false, source: "none" },
+  playerPos: { x: 0, y: 0, yaw: 0 },
+  projectileCount: 0,
+  lastEvent: "—",
+  tick: 0,
 };
 
 export const App = () => {
-  const [status, setStatus] = useState("disconnected");
-  const [connected, setConnected] = useState(false);
-  const [tauntText, setTauntText] = useState("server taunts pending");
-  const [hud, setHud] = useState<CombatState | null>(null);
-  const [debug, setDebug] = useState({ queueLen: 0, rttMs: 0 });
+  const [tauntText, setTauntText] = useState("");
+  const [playing, setPlaying] = useState(false);
+  const [debug, setDebug] = useState<DebugState>(INITIAL_DEBUG);
+  const [barrierBreaks, setBarrierBreaks] = useState<BarrierBreakEvent[]>([]);
 
-  const sessionId = useMemo(() => crypto.randomUUID(), []);
   const stateRef = useRef<CombatState>(createStateFromSeed(0x2f2f));
   const config = useMemo(() => createCombatConfig(0x2f2f), []);
   const playerQueueRef = useRef(new InputQueue());
@@ -94,6 +124,14 @@ export const App = () => {
   const rngRef = useRef(new SeededRNG(config.seed));
   const pipelineRef = useRef(createDefaultControlPipeline());
   const socketRef = useRef<ReturnType<typeof createCombat3DSocket> | null>(null);
+  const keyStateRef = useRef<KeyState>(createKeyState());
+  const prevScoreRef = useRef({ player: 0, enemy: 0 });
+  const lastEventRef = useRef("—");
+
+  // Barrier collision state — initialized from the same deterministic obstacle generation
+  const barriersRef = useRef<Barrier[]>(
+    barriersFromObstacles(generateObstacles(0x2f2f, 20)),
+  );
 
   const lastFrameMsRef = useRef(performance.now());
   const accumulatorMsRef = useRef(0);
@@ -114,11 +152,10 @@ export const App = () => {
         };
         playerQueueRef.current.push(input);
 
-        setDebug((current) => ({ queueLen: playerQueueRef.current.length + enemyQueueRef.current.length, rttMs: current.rttMs }));
+        setDebug((current) => ({ ...current, queueLen: playerQueueRef.current.length + enemyQueueRef.current.length }));
       },
       onSession: (_payload: JoinResponse) => {
-        setConnected(true);
-        setStatus("connected");
+        // Socket connected — could trigger UI state in future
       },
       onTaunt: (payload: TauntPacket) => {
         setTauntText(payload.tone);
@@ -149,6 +186,12 @@ export const App = () => {
         const currentState = stateRef.current;
         const simTimeMs = currentState.simTimeMs + FRAME_MS;
 
+        // ── Keyboard: sample held keys at sim time ──
+        const kbInput = sampleKeyboard(keyStateRef.current, simTimeMs);
+        if (hasActiveInput(keyStateRef.current)) {
+          playerQueueRef.current.push(kbInput);
+        }
+
         const deterministicEnemy = createOpponentInput(
           { x: currentState.player.x, y: currentState.player.y },
           currentState.enemy,
@@ -167,18 +210,46 @@ export const App = () => {
             playerInput,
             enemyInput,
             dtMs: FRAME_MS,
+            barriers: barriersRef.current,
           },
           rngRef.current,
         );
 
         stateRef.current = result.state;
 
+        // Emit barrier break events to React state for rendering
+        if (result.newBreakEvents.length > 0) {
+          setBarrierBreaks((prev) => [...prev, ...result.newBreakEvents]);
+        }
+
+        // Track score change events
+        const s = result.state.score;
+        if (s.player !== prevScoreRef.current.player) {
+          lastEventRef.current = `PlayerHit @${result.state.tick}`;
+        } else if (s.enemy !== prevScoreRef.current.enemy) {
+          lastEventRef.current = `EnemyHit @${result.state.tick}`;
+        }
+        prevScoreRef.current = s;
+
         if (stateRef.current.tick % 6 === 0) {
-          setHud(stateRef.current);
-          setDebug((current) => ({
+          setDebug({
             queueLen: playerQueueRef.current.length + enemyQueueRef.current.length,
-            rttMs: current.rttMs,
-          }));
+            rttMs: 0,
+            lastInput: {
+              throttle: playerInput.throttle,
+              turn: playerInput.turn,
+              fire: playerInput.fire,
+              source: hasActiveInput(keyStateRef.current) ? "keyboard" : "bci",
+            },
+            playerPos: {
+              x: stateRef.current.player.x,
+              y: stateRef.current.player.y,
+              yaw: stateRef.current.player.yaw,
+            },
+            projectileCount: stateRef.current.projectiles.length,
+            lastEvent: lastEventRef.current,
+            tick: stateRef.current.tick,
+          });
         }
 
         accumulatorMsRef.current -= FRAME_MS;
@@ -187,14 +258,24 @@ export const App = () => {
       rafRef.current = requestAnimationFrame(loop);
     };
 
-    const onKeyDown = (event: KeyboardEvent) => {
-      const now = performance.now();
-      const input = createFallbackInput(now, event);
-      playerQueueRef.current.push(input);
+    const applyKey = (event: KeyboardEvent, value: boolean) => {
+      if (!TRACKED_KEYS.has(event.key)) return;
+      event.preventDefault();
+      const keys = keyStateRef.current;
+      const k = event.key.toLowerCase();
+      if (k === "arrowup" || k === "w") keys.up = value;
+      else if (k === "arrowdown" || k === "s") keys.down = value;
+      else if (k === "arrowleft" || k === "a") keys.left = value;
+      else if (k === "arrowright" || k === "d") keys.right = value;
+      else if (k === " ") keys.fire = value;
     };
 
+    const onKeyDown = (event: KeyboardEvent) => applyKey(event, true);
+    const onKeyUp = (event: KeyboardEvent) => applyKey(event, false);
+
     rafRef.current = requestAnimationFrame(loop);
-    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keydown", onKeyDown, { passive: false });
+    window.addEventListener("keyup", onKeyUp);
 
     return () => {
       alive = false;
@@ -202,24 +283,38 @@ export const App = () => {
         cancelAnimationFrame(rafRef.current);
       }
       window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
     };
   }, [config]);
 
-  const handleStart = (nextMode: BCIMode): void => {
-    pipelineRef.current.updateMode(nextMode);
-    setStatus("connecting");
-    socketRef.current?.connect(sessionId, nextMode);
-  };
+  const handlePlay = useCallback(() => {
+    setPlaying(true);
+  }, []);
 
   return (
     <div className="relative h-screen overflow-hidden">
-      <CombatView stateRef={stateRef as RefObject<CombatState>} />
-      <HUD state={hud} status={status} taunt={tauntText} />
+      <CombatView
+        stateRef={stateRef as RefObject<CombatState>}
+        barrierBreaks={barrierBreaks}
+      />
+
       <DebugPanel debug={debug} />
-      <SessionControls onStart={handleStart} disabled={connected} />
-      <div className="absolute right-3 bottom-3 z-10 text-xs text-cyan-200">
-        Arrow keys are manual fallback.
-      </div>
+
+      {/* Speech-bubble taunt — only shown when text exists */}
+      <TauntBubble text={tauntText} onDismiss={() => setTauntText("")} />
+
+      {/* Play button — shown until first interaction */}
+      {!playing && (
+        <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+          <button
+            type="button"
+            onClick={handlePlay}
+            className="rounded-xl border border-emerald-400/60 bg-emerald-600 px-8 py-3 text-lg font-bold uppercase tracking-wider text-white shadow-lg shadow-emerald-900/40 transition hover:bg-emerald-500 hover:shadow-emerald-700/60 active:scale-95"
+          >
+            ▶ Play
+          </button>
+        </div>
+      )}
     </div>
   );
 };

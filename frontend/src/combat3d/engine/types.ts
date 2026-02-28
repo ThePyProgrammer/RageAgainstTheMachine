@@ -3,6 +3,7 @@ export interface InputSample {
   throttle: number;
   turn: number;
   fire: boolean;
+  reload?: boolean;
 }
 
 export interface CombatVehicleState {
@@ -13,6 +14,11 @@ export interface CombatVehicleState {
   vy: number;
   cooldownMs: number;
   speedBoostMs: number;
+  hp: number;
+  maxHp: number;
+  ammo: number;
+  maxAmmo: number;
+  reloadMs: number; // >0 means currently reloading
 }
 
 export interface Projectile {
@@ -41,6 +47,8 @@ export interface CombatState {
     enemy: number;
   };
   difficulty: CombatDifficultyState;
+  /** Set on the tick a vehicle was killed & respawned */
+  lastKillEvent?: { victim: "player" | "enemy"; tick: number };
 }
 
 export interface SimulationConfig {
