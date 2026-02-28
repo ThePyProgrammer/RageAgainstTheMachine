@@ -27,15 +27,15 @@ const MIN_HORIZONTAL_VELOCITY_RATIO = 0.2;
 
 export const DEFAULT_WIDTH = 960;
 export const DEFAULT_HEIGHT = 540;
-export const DEFAULT_LIVES = 3;
-export const PADDLE_SPEED = 420;
-export const BASE_BALL_SPEED = 330;
+export const DEFAULT_LIVES = 5;
+export const PADDLE_SPEED = 600;
+export const BASE_BALL_SPEED = 450;
 
-export const START_BLOCK_COUNT = 12;
-export const BLOCKS_PER_LEVEL_STEP = 4;
-export const MAX_BLOCK_COUNT = 32;
-export const LEVEL_SPEED_STEP = 0.05;
-export const MAX_SPEED_BONUS = 0.4;
+export const START_BLOCK_COUNT = 8;
+export const BLOCKS_PER_LEVEL_STEP = 3;
+export const MAX_BLOCK_COUNT = 20;
+export const LEVEL_SPEED_STEP = 0.1;
+export const MAX_SPEED_BONUS = 0.5;
 
 const PADDLE_WIDTH = 132;
 const PADDLE_HEIGHT = 14;

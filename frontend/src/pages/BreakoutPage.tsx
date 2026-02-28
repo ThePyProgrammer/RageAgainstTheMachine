@@ -7,7 +7,6 @@ import {
   createInitialRuntimeState,
   type LoopDebugPayload,
 } from "@/features/breakout/game/gameLoop";
-import { DebugOverlay } from "@/features/breakout/components/DebugOverlay";
 import { GameCanvas } from "@/features/breakout/components/GameCanvas";
 import { KeyboardHints } from "@/features/breakout/components/KeyboardHints";
 import { MenuScreen } from "@/features/breakout/components/MenuScreen";
@@ -745,6 +744,7 @@ export default function BreakoutPage() {
             packetRateHz={eegPane.packetRateHz}
             activeHemisphere={eegPane.activeHemisphere}
             mode="classifier"
+            positionClassName="top-3 right-3"
           />
           {gameOver && (
             <div className="absolute inset-0 z-30 flex items-center justify-center pointer-events-none">
@@ -756,7 +756,6 @@ export default function BreakoutPage() {
               </div>
             </div>
           )}
-          <DebugOverlay {...debug} />
           <KeyboardHints mode="game" />
           <div className="absolute top-2 right-2 z-40 flex items-center gap-2">
             <button
