@@ -2,6 +2,57 @@
 
 All WebSocket events with TypeScript types and Zod schemas.
 
+## AI Opponent WebSocket (Implemented in FastAPI)
+
+Endpoint: `/opponent/ws`
+
+### Client -> Server (`game_event`)
+
+```json
+{
+  "type": "game_event",
+  "event_id": "evt-1",
+  "game_mode": "pong",
+  "event": "player_score",
+  "score": { "player": 3, "ai": 2 },
+  "current_difficulty": 0.62,
+  "event_context": { "near_side": "ai_goal", "proximity": 0.2 },
+  "timestamp_ms": 1730000000000
+}
+```
+
+### Server -> Client (`opponent_update`)
+
+```json
+{
+  "type": "opponent_update",
+  "event_id": "evt-1",
+  "taunt_text": "You're sweating already.",
+  "difficulty": { "previous": 0.62, "model_target": 0.82, "final": 0.70 },
+  "speech": { "mime_type": "audio/mpeg", "audio_base64": "..." },
+  "metrics": { "stress": 0.64, "frustration": 0.58, "focus": 0.42, "alertness": 0.73 },
+  "meta": { "provider": "responses_speech", "latency_ms": 420, "metrics_age_ms": 105 },
+  "timestamp_ms": 1730000000500
+}
+```
+
+### Recoverable Error Message
+
+```json
+{
+  "type": "error",
+  "code": "INVALID_EVENT|OPENAI_ERROR|METRICS_UNAVAILABLE|RATE_LIMIT",
+  "message": "human-readable error",
+  "recoverable": true
+}
+```
+
+### Notes
+
+- Opponent events are validated server-side with Pydantic models in `backend/opponent/models.py`.
+- Command-centre metrics are backend-authoritative and sourced from live EEG streamers.
+- Difficulty updates still flow even when taunt/speech is rate-limited or OpenAI calls fail.
+
 ## Type Definitions
 
 Location: `/packages/shared/src/events.ts`

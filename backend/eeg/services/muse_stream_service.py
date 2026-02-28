@@ -44,6 +44,9 @@ class MuseStreamer:
             sampling_rate=DEVICE_CFG["sampling_rate"],
         )
         self.cc_broadcaster = WebSocketBroadcaster()
+        self._cc_signal_lock = threading.Lock()
+        self._latest_cc_signal = None
+        self._latest_cc_monotonic = None
         self.eeg_buffer = None
         self.inlet = None
 
@@ -73,6 +76,9 @@ class MuseStreamer:
         self.stop_event.clear()
         self.session_start_time = datetime.now()
         self.command_centre_processor.reset()
+        with self._cc_signal_lock:
+            self._latest_cc_signal = None
+            self._latest_cc_monotonic = None
         self.thread = threading.Thread(target=self._stream_loop, daemon=True)
         self.thread.start()
         self.is_running = True
@@ -98,6 +104,20 @@ class MuseStreamer:
 
     def unregister_cc_client(self, websocket):
         self.cc_broadcaster.unregister_client(websocket)
+
+    def _store_latest_cc_signal(self, payload: dict) -> None:
+        with self._cc_signal_lock:
+            self._latest_cc_signal = payload.copy()
+            self._latest_cc_monotonic = time.monotonic()
+
+    def get_latest_cc_signal(self) -> dict | None:
+        with self._cc_signal_lock:
+            if self._latest_cc_signal is None:
+                return None
+            return {
+                "payload": self._latest_cc_signal.copy(),
+                "monotonic": self._latest_cc_monotonic,
+            }
 
     # ------------------------------------------------------------------
     # Internal streaming loop
@@ -249,6 +269,7 @@ class MuseStreamer:
                 cc_payload = self.command_centre_processor.update(filtered_chunk)
                 if cc_payload is not None:
                     cc_payload["device_type"] = "muse_v1"
+                    self._store_latest_cc_signal(cc_payload)
                     self.cc_broadcaster.broadcast_json({"signal": cc_payload})
 
         except Exception as exc:

@@ -6,6 +6,7 @@ from eeg.routes import router as eeg_router
 # from ppg.routes import router as ppg_router
 # from ocular.routes import router as ocular_router
 from mi.routes import router as mi_router
+from opponent.routes import router as opponent_router
 
 from shared.config.logging import configure_logging, get_logger
 # from ppg.controller import initialize as initialize_ppg
@@ -49,6 +50,7 @@ app.include_router(eeg_router)
 # app.include_router(ppg_router)
 # app.include_router(ocular_router)
 app.include_router(mi_router)
+app.include_router(opponent_router)
 
 if __name__ == "__main__":
     uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)
