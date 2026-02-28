@@ -1,4 +1,5 @@
 import time
+import re
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -55,7 +56,7 @@ def test_opponent_websocket_happy_path(monkeypatch) -> None:
     monkeypatch.setattr(
         opponent_routes.openai_service,
         "generate_speech_base64",
-        lambda _: "ZmFrZS1tcDM=",
+        lambda *_, **__: "ZmFrZS1tcDM=",
     )
 
     app = _build_app()
@@ -156,3 +157,45 @@ def test_openai_failure_falls_back(monkeypatch) -> None:
         update_msg = ws.receive_json()
         assert update_msg["type"] == "opponent_update"
         assert update_msg["meta"]["provider"] == "rule_based"
+
+
+def test_taunt_is_qualitative_not_numeric(monkeypatch) -> None:
+    class FakeStreamer:
+        @staticmethod
+        def get_latest_cc_signal():
+            return {
+                "payload": {
+                    "signals": {
+                        "stress": 0.82,
+                        "frustration": 0.74,
+                        "focus": 0.35,
+                        "alertness": 0.44,
+                    }
+                },
+                "monotonic": time.monotonic(),
+            }
+
+    monkeypatch.setattr(opponent_routes, "get_active_streamer", lambda: FakeStreamer())
+    monkeypatch.setattr(opponent_routes.openai_service, "is_available", lambda: True)
+    monkeypatch.setattr(
+        opponent_routes.openai_service,
+        "generate_structured_output",
+        lambda **_: OpponentLLMOutput(
+            taunt_text="You are at 82% stress and I just raised difficulty to 0.8.",
+            difficulty_target=0.82,
+        ),
+    )
+    monkeypatch.setattr(
+        opponent_routes.openai_service,
+        "generate_speech_base64",
+        lambda *_, **__: "ZmFrZS1tcDM=",
+    )
+
+    app = _build_app()
+    with TestClient(app).websocket_connect("/opponent/ws") as ws:
+        ws.send_json(_valid_event_payload(event_id="evt-qualitative"))
+        response = ws.receive_json()
+        assert response["type"] == "opponent_update"
+        taunt = response["taunt_text"]
+        assert re.search(r"\d", taunt) is None
+        assert "%" not in taunt

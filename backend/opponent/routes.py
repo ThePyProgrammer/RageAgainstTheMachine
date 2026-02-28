@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
+import re
 import time
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
 
-from eeg.services.stream_service import get_active_streamer
 from opponent.models import (
     MetaPayload,
     MetricsPayload,
@@ -32,11 +32,21 @@ from shared.config.app_config import (
     OPPONENT_MAX_TAUNT_CHARS,
     OPPONENT_MIN_TAUNT_INTERVAL_MS,
     OPPONENT_TEXT_MODEL,
+    OPPONENT_TEXT_TEMPERATURE,
     OPPONENT_TIMEOUT_MS,
+    OPPONENT_TTS_INSTRUCTIONS,
     OPPONENT_TTS_MODEL,
+    OPPONENT_TTS_SPEED,
     OPPONENT_TTS_VOICE,
 )
 from shared.config.logging import get_logger
+
+try:
+    from eeg.services.stream_service import get_active_streamer
+except Exception:  # pragma: no cover - allows standalone testing without EEG deps
+    def get_active_streamer():
+        raise RuntimeError("EEG stream service unavailable in current environment")
+
 
 router = APIRouter(
     prefix="/opponent",
@@ -56,8 +66,11 @@ DEFAULT_METRICS = MetricsSnapshot(
 openai_service = OpenAIOpponentService(
     api_key=OPENAI_API_KEY,
     text_model=OPPONENT_TEXT_MODEL,
+    text_temperature=OPPONENT_TEXT_TEMPERATURE,
     tts_model=OPPONENT_TTS_MODEL,
     tts_voice=OPPONENT_TTS_VOICE,
+    tts_instructions=OPPONENT_TTS_INSTRUCTIONS,
+    tts_speed=OPPONENT_TTS_SPEED,
     timeout_ms=OPPONENT_TIMEOUT_MS,
 )
 fallback_service = RuleBasedFallbackService()
@@ -216,7 +229,17 @@ async def _generate_response_bundle(
             user_prompt=user_prompt,
             max_taunt_chars=OPPONENT_MAX_TAUNT_CHARS,
         )
-        taunt_text = llm_output.taunt_text[:OPPONENT_MAX_TAUNT_CHARS]
+        taunt_text = _ensure_metric_reference(
+            llm_output.taunt_text,
+            metrics=metrics,
+            max_chars=OPPONENT_MAX_TAUNT_CHARS,
+        )
+        if _looks_canned(taunt_text):
+            taunt_text = _ensure_metric_reference(
+                fallback_service.generate_taunt(event=event, metrics=metrics),
+                metrics=metrics,
+                max_chars=OPPONENT_MAX_TAUNT_CHARS,
+            )
         model_target = llm_output.difficulty_target
         provider = "responses_speech"
     except Exception as exc:
@@ -231,7 +254,10 @@ async def _generate_response_bundle(
         return provider, taunt_text, model_target, audio_base64
 
     try:
-        audio_base64 = openai_service.generate_speech_base64(taunt_text)
+        audio_base64 = openai_service.generate_speech_base64(
+            taunt_text,
+            instructions=_build_dynamic_tts_instructions(metrics=metrics),
+        )
     except Exception as exc:
         logger.error("OpenAI speech generation failed: %s", exc, exc_info=True)
         await websocket.send_json(
@@ -283,3 +309,101 @@ def _safe_signal_value(raw_value: object, default: float) -> float:
         return clamp01(float(raw_value))
     except Exception:
         return default
+
+
+def _build_dynamic_tts_instructions(metrics: MetricsSnapshot) -> str:
+    dominant, value = _dominant_metric(metrics)
+    if dominant == "stress":
+        return "Use sharper emphasis and a quick, confident cadence."
+    if dominant == "frustration":
+        return "Lean into playful provocation with animated intonation."
+    if dominant == "focus":
+        return "Use crisp pacing with bright competitive energy."
+    return "Use lively projection with light teasing confidence."
+
+
+def _dominant_metric(metrics: MetricsSnapshot) -> tuple[str, float]:
+    values = {
+        "stress": metrics.stress,
+        "frustration": metrics.frustration,
+        "focus": metrics.focus,
+        "alertness": metrics.alertness,
+    }
+    key = max(values, key=values.get)
+    return key, values[key]
+
+
+def _ensure_metric_reference(text: str, metrics: MetricsSnapshot, max_chars: int) -> str:
+    normalized = " ".join(text.split())
+    if not normalized:
+        normalized = "You're cracking under pressure."
+
+    # Keep taunts qualitative: strip explicit numeric mentions and percent markers.
+    normalized = re.sub(r"\b\d+(?:\.\d+)?%?\b", "", normalized)
+    normalized = normalized.replace("%", "")
+    normalized = re.sub(
+        r"\b(difficulty|difficulty_target|target|adjustment|adjust|raise|lower)\b",
+        "pressure",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    normalized = re.sub(r"\s{2,}", " ", normalized).strip(" ,.;:!?")
+    if not normalized:
+        normalized = "You're cracking under pressure."
+
+    lowered = normalized.lower()
+    metric_terms = ("stress", "frustration", "focus", "alertness")
+    has_metric_ref = any(term in lowered for term in metric_terms)
+    metric_fragment = _qualitative_metric_fragment(metrics)
+
+    candidate = normalized
+    if not has_metric_ref:
+        candidate = f"{normalized}. {metric_fragment}"
+
+    candidate = candidate.strip(" .")
+    if len(candidate) > max_chars:
+        candidate = candidate[:max_chars].rstrip(" ,.;:!?")
+    if not candidate:
+        candidate = metric_fragment[:max_chars]
+    return candidate
+
+
+def _qualitative_metric_fragment(metrics: MetricsSnapshot) -> str:
+    dominant, value = _dominant_metric(metrics)
+    if dominant == "stress":
+        if value > 0.72:
+            return "Stress is spiking and I can see it."
+        if value > 0.45:
+            return "Stress is climbing and your rhythm is slipping."
+        return "Stress is steady, but the pressure is still on."
+    if dominant == "frustration":
+        if value > 0.72:
+            return "Frustration is taking over your decision making."
+        if value > 0.45:
+            return "Frustration is creeping into your timing."
+        return "Frustration is low, but I can change that."
+    if dominant == "focus":
+        if value > 0.72:
+            return "Focus is sharp, but I can still shake you."
+        if value > 0.45:
+            return "Focus is wobbling under pressure."
+        return "Focus is fading and your reactions show it."
+    if value > 0.72:
+        return "Alertness is high, so I am turning up the heat."
+    if value > 0.45:
+        return "Alertness is unstable and your tempo is uneven."
+    return "Alertness is dipping and you are reacting late."
+
+
+def _looks_canned(text: str) -> bool:
+    lowered = text.lower()
+    banned_fragments = (
+        "keep up",
+        "try harder",
+        "ready for",
+        "nice shot",
+        "can you handle",
+        "keep watching",
+        "let's see if you can",
+    )
+    return any(fragment in lowered for fragment in banned_fragments)
