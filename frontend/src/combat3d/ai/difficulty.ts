@@ -18,6 +18,9 @@ export const updateDifficulty = (state: CombatState, playerScore: number, enemyS
   };
 };
 
+/** Distance² threshold below which enemy is in shooting range */
+const SHOOT_RANGE_SQ = 40 * 40; // 40 units
+
 export const createOpponentInput = (
   playerPos: { x: number; y: number },
   enemyState: { x: number; y: number; yaw: number },
@@ -27,13 +30,20 @@ export const createOpponentInput = (
 ): InputSample => {
   const aimX = playerPos.x - enemyState.x;
   const aimY = playerPos.y - enemyState.y;
+  const distSq = aimX * aimX + aimY * aimY;
   const yawToTarget = Math.atan2(aimY, aimX);
   const yawDelta = ((yawToTarget - enemyState.yaw + Math.PI) % (Math.PI * 2)) - Math.PI;
 
   const jitter = rng.nextSignedRange() * (0.4 + difficulty.aggression * 0.4);
   const turn = Math.max(-1, Math.min(1, yawDelta * 0.25 + jitter));
-  const throttle = Math.min(1, Math.max(-1, Math.abs(aimX) > 8 || Math.abs(aimY) > 8 ? 0.35 : 0.02));
-  const fire = Math.abs(yawDelta) < (1 - difficulty.reactionMs / 500);
+
+  // Always chase the player — more aggressive throttle
+  const throttle = Math.min(1, Math.max(-1, 0.55 + difficulty.aggression * 0.3));
+
+  // Shoot immediately when in range AND roughly aimed at the player
+  const aimed = Math.abs(yawDelta) < 0.5;
+  const inRange = distSq < SHOOT_RANGE_SQ;
+  const fire = aimed && inRange;
 
   return {
     timestamp: timeMs,

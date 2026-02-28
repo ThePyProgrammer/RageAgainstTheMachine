@@ -1,16 +1,17 @@
 import { useFrame } from "@react-three/fiber";
-import { OrbitControls } from "@react-three/drei";
+import { OrbitControls, Html } from "@react-three/drei";
 import type { RefObject } from "react";
 import { useRef, useMemo, useState } from "react";
 import type { Mesh, InstancedMesh as ThreeInstancedMesh } from "three";
 import * as THREE from "three";
-import type { CombatState } from "../engine/types";
+import type { CombatState, DynamicObstacle } from "../engine/types";
 import type { BarrierBreakEvent } from "../engine/barriers";
 import { SeededRNG } from "../engine/seededRng";
 
 interface CombatSceneProps {
   stateRef: RefObject<CombatState>;
   barrierBreaks: BarrierBreakEvent[];
+  dynamicObstacles?: DynamicObstacle[];
 }
 
 /* ── Deterministic obstacle generation ─────────────────────────────── */
@@ -186,6 +187,117 @@ const FragmentCloud = ({
   );
 };
 
+/* ── Floating health bar (billboarded above vehicles) ────────────── */
+
+/** Follows a vehicle each frame via stateRef and renders HP + optional ammo bar. */
+const VehicleHealthBar = ({
+  stateRef,
+  who,
+  color,
+  showAmmo,
+}: {
+  stateRef: RefObject<CombatState>;
+  who: "player" | "enemy";
+  color: string;
+  showAmmo?: boolean;
+}) => {
+  const groupRef = useRef<THREE.Group>(null);
+  const [hp, setHp] = useState(5);
+  const [maxHp, setMaxHp] = useState(5);
+  const [ammo, setAmmo] = useState(15);
+  const [maxAmmo, setMaxAmmo] = useState(15);
+  const [reloadMs, setReloadMs] = useState(0);
+
+  useFrame(() => {
+    const state = stateRef.current;
+    if (!state || !groupRef.current) return;
+    const v = state[who];
+    groupRef.current.position.set(v.x, 3.2, v.y);
+    // Only trigger React re-render when values actually change
+    setHp(v.hp);
+    setMaxHp(v.maxHp);
+    if (showAmmo) {
+      setAmmo(v.ammo);
+      setMaxAmmo(v.maxAmmo);
+      setReloadMs(v.reloadMs);
+    }
+  });
+
+  const pct = Math.max(0, hp / maxHp);
+  const barWidth = 48;
+  const ammoPct = showAmmo ? Math.max(0, ammo / maxAmmo) : null;
+  const reloading = showAmmo && reloadMs > 0;
+  const reloadPct = reloading ? Math.min(1, reloadMs / 2000) : 0;
+
+  return (
+    <group ref={groupRef}>
+      <Html center distanceFactor={18} style={{ pointerEvents: "none" }}>
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
+          {/* HP bar */}
+          <div style={{
+            width: barWidth,
+            height: 6,
+            background: "rgba(0,0,0,0.7)",
+            borderRadius: 3,
+            border: "1px solid rgba(255,255,255,0.25)",
+            overflow: "hidden",
+          }}>
+            <div style={{
+              width: `${pct * 100}%`,
+              height: "100%",
+              background: pct > 0.5 ? color : pct > 0.25 ? "#ff8c00" : "#ff2222",
+              borderRadius: 3,
+              transition: "width 0.12s ease-out",
+            }} />
+          </div>
+          {/* Ammo bar (only for player) */}
+          {ammoPct != null && (
+            <div style={{
+              width: barWidth,
+              height: 4,
+              background: "rgba(0,0,0,0.6)",
+              borderRadius: 2,
+              border: "1px solid rgba(255,255,255,0.15)",
+              overflow: "hidden",
+            }}>
+              {reloading ? (
+                <div style={{
+                  width: `${reloadPct * 100}%`,
+                  height: "100%",
+                  background: "#ffcc00",
+                  borderRadius: 2,
+                  transition: "width 0.08s linear",
+                }} />
+              ) : (
+                <div style={{
+                  width: `${ammoPct * 100}%`,
+                  height: "100%",
+                  background: ammoPct > 0.3 ? "#66bbff" : "#ff6644",
+                  borderRadius: 2,
+                  transition: "width 0.08s ease-out",
+                }} />
+              )}
+            </div>
+          )}
+          {/* Reload label */}
+          {reloading && (
+            <div style={{
+              fontSize: 8,
+              color: "#ffcc00",
+              fontWeight: 700,
+              fontFamily: "monospace",
+              textShadow: "0 0 4px rgba(0,0,0,0.9)",
+              marginTop: -1,
+            }}>
+              RELOADING
+            </div>
+          )}
+        </div>
+      </Html>
+    </group>
+  );
+};
+
 const BoundaryWalls = () => {
   const wallHeight = 3;
   const wallThickness = 0.5;
@@ -229,7 +341,7 @@ const GroundGrid = () => {
 
 /* ── Main scene ────────────────────────────────────────────────────── */
 
-export const Combat3DScene = ({ stateRef, barrierBreaks }: CombatSceneProps) => {
+export const Combat3DScene = ({ stateRef, barrierBreaks, dynamicObstacles }: CombatSceneProps) => {
   const playerRef = useRef<Mesh>(null);
   const enemyRef = useRef<Mesh>(null);
 
@@ -307,6 +419,19 @@ export const Combat3DScene = ({ stateRef, barrierBreaks }: CombatSceneProps) => 
         <ObstacleMesh key={`obs-${i}`} obs={obs} broken={brokenIds.has(i)} />
       ))}
 
+      {/* Dynamically-spawned small obstacles (low-HP phase) */}
+      {dynamicObstacles?.map((dyn) => (
+        <mesh key={`dyn-${dyn.id}`} position={[dyn.x, dyn.height / 2, dyn.z]}>
+          <boxGeometry args={[dyn.width, dyn.height, dyn.depth]} />
+          <meshStandardMaterial
+            color={dyn.color}
+            emissive={dyn.color}
+            emissiveIntensity={0.25}
+            roughness={0.6}
+          />
+        </mesh>
+      ))}
+
       {/* Fragment clouds for broken barriers */}
       {activeFragments.map((evt) => (
         <FragmentCloud
@@ -328,6 +453,19 @@ export const Combat3DScene = ({ stateRef, barrierBreaks }: CombatSceneProps) => 
         <coneGeometry args={[0.9, 2, 16]} />
         <meshStandardMaterial color="#ff4d4d" emissive="#aa1111" emissiveIntensity={0.3} />
       </mesh>
+
+      {/* Floating health bars (tracked per-frame via stateRef inside useFrame) */}
+      <VehicleHealthBar
+        stateRef={stateRef}
+        who="player"
+        color="#4d9dff"
+        showAmmo
+      />
+      <VehicleHealthBar
+        stateRef={stateRef}
+        who="enemy"
+        color="#ff4d4d"
+      />
 
       <OrbitControls enabled={false} />
 

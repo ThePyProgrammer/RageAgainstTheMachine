@@ -38,6 +38,7 @@ const classifierToControl = (packet: Extract<BCIStreamPacket, { kind: "classifie
 };
 
 export class ControlPipeline {
+  private readonly config: PipelineConfig;
   private readonly throttleFilter = new EMAFilter(0.2);
   private readonly turnFilter = new EMAFilter(0.2);
   private readonly fireGate = new BinaryHysteresis({ enterThreshold: 0.6, exitThreshold: 0.4 });
@@ -52,10 +53,8 @@ export class ControlPipeline {
   private lastPacketAtMs = 0;
   private mode: BCIMode;
 
-  constructor(
-    private readonly config: PipelineConfig,
-    mode: BCIMode,
-  ) {
+  constructor(config: PipelineConfig, mode: BCIMode) {
+    this.config = config;
     this.mode = mode;
   }
 
@@ -83,7 +82,9 @@ export class ControlPipeline {
     const mapped =
       this.mode === "features"
         ? featuresToControl(packet.kind === "features" ? packet.features : [], packet.confidence)
-        : classifierToControl(packet);
+        : packet.kind === "classifier"
+          ? classifierToControl(packet)
+          : this.holdOrDecay(packet.timestamp, packet.kind);
     const filtered = this.clampAndFilter(mapped, packet.timestamp);
 
     this.lastGood = filtered;

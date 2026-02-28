@@ -5,8 +5,10 @@ export interface HysteresisConfig {
 
 export class BinaryHysteresis {
   private state = false;
+  private readonly config: HysteresisConfig;
 
-  constructor(private readonly config: HysteresisConfig) {
+  constructor(config: HysteresisConfig) {
+    this.config = config;
     if (config.exitThreshold >= config.enterThreshold) {
       throw new Error("exitThreshold must be lower than enterThreshold");
     }
