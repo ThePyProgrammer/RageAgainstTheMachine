@@ -185,7 +185,7 @@ const createInitialEegHudState = (): EegStreamHudState => ({
 
 /* ── EEG calibration types & helpers ──────────────────────────────── */
 
-type CombatScreen = "menu" | "calibration" | "game";
+type CombatScreen = "menu" | "calibration" | "game" | "paused";
 type CalibrationStep = "left" | "right" | "fine_tuning" | "complete" | "error";
 
 const LEFT_TRIAL_MS = 7000;
@@ -520,6 +520,24 @@ export const App = () => {
   // Clean up MI socket on unmount
   useEffect(() => () => { teardownMiSocket(); }, [teardownMiSocket]);
 
+  // Pause (P) and quit (Esc) shortcuts
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && (screenRef.current === "game" || screenRef.current === "paused")) {
+        event.preventDefault();
+        teardownMiSocket();
+        setScreen("menu");
+        return;
+      }
+      if (event.key.toLowerCase() === "p" && (screenRef.current === "game" || screenRef.current === "paused")) {
+        event.preventDefault();
+        setScreen((prev) => (prev === "paused" ? "game" : "paused"));
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [teardownMiSocket]);
+
   useEffect(() => {
     const socket = createCombat3DSocket({
       url: WS_URL,
@@ -795,7 +813,7 @@ export const App = () => {
             />
 
             {/* ── Scoreboard HUD ── */}
-            {screen === "game" && (
+            {(screen === "game" || screen === "paused") && (
               <div className="pointer-events-none absolute top-4 left-1/2 z-20 -translate-x-1/2 select-none">
                 <div className="flex items-center gap-4 rounded-xl border border-white/15 bg-black/60 px-6 py-2 backdrop-blur-sm">
                   <div className="flex items-center gap-2">
@@ -811,7 +829,7 @@ export const App = () => {
               </div>
             )}
 
-            {screen === "game" && <DebugPanel debug={debug} />}
+            {(screen === "game" || screen === "paused") && <DebugPanel debug={debug} />}
 
             {screen === "game" && (
               <EEGStreamModal
@@ -836,7 +854,7 @@ export const App = () => {
 
             {/* BCI control tip — EEG mode only, minimizable */}
             {screen === "game" && eegMode && tipVisible && (
-              <div className="absolute top-4 right-4 z-30 flex items-start gap-2 rounded-lg border border-cyan-700/40 bg-black/70 px-3 py-2 text-xs text-cyan-200 backdrop-blur-sm">
+              <div className="absolute top-12 right-4 z-30 flex items-start gap-2 rounded-lg border border-cyan-700/40 bg-black/70 px-3 py-2 text-xs text-cyan-200 backdrop-blur-sm">
                 <div>
                   <span className="mb-0.5 block font-semibold">BCI Controls</span>
                   Look left &rarr; Rotate CCW &nbsp;|&nbsp; Look right &rarr; Rotate CW
@@ -848,6 +866,37 @@ export const App = () => {
                   aria-label="Dismiss tip"
                 >
                   &#x2715;
+                </button>
+              </div>
+            )}
+
+            {/* Paused overlay */}
+            {screen === "paused" && (
+              <div className="pointer-events-none absolute inset-0 z-[25] flex items-center justify-center">
+                <span className="text-3xl font-bold tracking-widest text-white/70 uppercase select-none">Paused</span>
+              </div>
+            )}
+
+            {/* Game control buttons — pause and quit */}
+            {(screen === "game" || screen === "paused") && (
+              <div className="absolute top-2 right-2 z-40 flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => { teardownMiSocket(); setScreen("menu"); }}
+                  style={{ fontSize: 18 }}
+                  className="rounded px-2 py-0.5 text-white/60 hover:text-white bg-black/50 hover:bg-black/80 border border-white/20 leading-none"
+                  title="Quit to menu (Esc)"
+                >
+                  ✕
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setScreen((prev) => (prev === "paused" ? "game" : "paused"))}
+                  style={{ fontSize: 18 }}
+                  className="rounded px-2 py-0.5 text-white/60 hover:text-white bg-black/50 hover:bg-black/80 border border-white/20 leading-none"
+                  title={screen === "paused" ? "Resume (P)" : "Pause (P)"}
+                >
+                  {screen === "paused" ? "▶" : "⏸"}
                 </button>
               </div>
             )}
