@@ -66,6 +66,7 @@ class PhysioNetDataset:
                     subject_id,
                     runs=[run],
                     path=str(self.data_dir.parent),
+                    update_path=False,
                     verbose=False,
                 )
 
@@ -100,7 +101,10 @@ class PhysioNetDataset:
 
         # Load raw data
         raw_files = mne.datasets.eegbci.load_data(
-            subject_id, runs=runs, path=str(self.data_dir.parent)
+            subject_id,
+            runs=runs,
+            path=str(self.data_dir.parent),
+            update_path=False,
         )
 
         # Read and concatenate runs
@@ -112,8 +116,34 @@ class PhysioNetDataset:
         # Standardize channel names
         mne.datasets.eegbci.standardize(raw)
 
-        # Pick motor cortex channels
-        raw.pick_channels(channels, ordered=True)
+        # Resolve channel aliases for compatibility across montage naming differences.
+        # EEGBCI commonly exposes T9/T10 while Muse naming uses TP9/TP10.
+        channel_aliases = {
+            "TP9": ["TP9", "T9"],
+            "TP10": ["TP10", "T10"],
+            "T9": ["T9", "TP9"],
+            "T10": ["T10", "TP10"],
+        }
+        resolved_channels: list[str] = []
+        missing_channels: list[str] = []
+        for channel in channels:
+            candidates = channel_aliases.get(channel, [channel])
+            resolved = next((name for name in candidates if name in raw.ch_names), None)
+            if resolved is None:
+                missing_channels.append(channel)
+            else:
+                resolved_channels.append(resolved)
+                if resolved != channel:
+                    logger.info("Channel alias applied: %s -> %s", channel, resolved)
+
+        if missing_channels:
+            raise ValueError(
+                f"Missing channel(s) {missing_channels}. Available channels include: "
+                f"{raw.ch_names[:20]}..."
+            )
+
+        # Pick requested channels (resolved aliases), preserving requested order.
+        raw.pick_channels(resolved_channels, ordered=True)
 
         # Find events - let MNE extract the actual event IDs
         events, event_id = mne.events_from_annotations(raw, verbose=False)

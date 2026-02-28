@@ -12,7 +12,8 @@ from mi.services.stream_service import MICalibrator
 from mi.services.calibration_manager import MICalibrationDataset
 from mi.services.fine_tuner import SimpleFineTuner
 from mi.services.mi_processor import MIProcessor
-from eeg.services.stream_service import get_shared_stream_service
+from eeg.services.stream_service import get_shared_stream_service, get_active_device_type
+from eeg.services.streaming.device_registry import get_device_config
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -31,6 +32,8 @@ current_calibrator: Optional[MICalibrator] = None
 current_fine_tuner: Optional[SimpleFineTuner] = None
 mi_processor: Optional[MIProcessor] = None
 
+DEFAULT_MUSE_MI_CHANNEL_ORDER = ["AF7", "AF8", "TP9", "TP10"]
+
 
 def _reset_mi_state(eeg_stream):
     """Clear MI streaming state and detach from EEG stream."""
@@ -40,6 +43,61 @@ def _reset_mi_state(eeg_stream):
         eeg_stream.mi_processor = None
     is_running = False
     mi_processor = None
+
+
+def _resolve_stream_channel_names(eeg_stream, device_cfg: dict) -> list[str]:
+    """Resolve channel names for active stream in ingestion order."""
+    stream_channels = getattr(eeg_stream, "channel_names", None)
+    if stream_channels:
+        return [str(name) for name in stream_channels]
+
+    cfg_channels = device_cfg.get("eeg_channel_names", [])
+    return [str(name) for name in cfg_channels]
+
+
+def _build_mi_stream_config(mi_controller, eeg_stream) -> dict:
+    """Build runtime MI stream configuration based on active device and model."""
+    mi_config = mi_init.load_mi_config()
+    target_rate = float(mi_config["preprocessing"]["sampling_rate"])
+    target_samples = int(mi_controller.classifier.model.n_samples)
+    muse_channel_order = mi_config.get("runtime", {}).get(
+        "muse_v1_channel_order", DEFAULT_MUSE_MI_CHANNEL_ORDER
+    )
+
+    device_type = get_active_device_type()
+    device_cfg = get_device_config(device_type)
+    source_rate = float(device_cfg["sampling_rate"])
+    source_channels = _resolve_stream_channel_names(eeg_stream, device_cfg)
+
+    channel_indices = None
+    selected_channels = source_channels
+
+    # Muse stream emits channels as TP9, AF7, AF8, TP10; MI model consumes AF7, AF8, TP9, TP10.
+    if device_type == "muse_v1":
+        missing = [name for name in muse_channel_order if name not in source_channels]
+        if missing:
+            logger.warning(
+                "[MI-WS] Muse channel(s) missing from stream %s. Falling back to stream order.",
+                missing,
+            )
+        else:
+            channel_indices = [source_channels.index(name) for name in muse_channel_order]
+            selected_channels = muse_channel_order
+
+    epoch_duration_seconds = target_samples / target_rate
+    epoch_samples = max(1, int(round(epoch_duration_seconds * source_rate)))
+
+    return {
+        "device_type": device_type,
+        "source_rate": source_rate,
+        "target_rate": target_rate,
+        "target_samples": target_samples,
+        "epoch_samples": epoch_samples,
+        "n_channels": len(selected_channels),
+        "channel_indices": channel_indices,
+        "source_channels": source_channels,
+        "selected_channels": selected_channels,
+    }
 
 
 @router.websocket("/ws")
@@ -97,12 +155,30 @@ async def websocket_endpoint(websocket: WebSocket):
                     # Create thread-safe prediction queue for communication between EEG thread and WebSocket
                     prediction_queue = queue.Queue(maxsize=100)
 
+                    stream_cfg = _build_mi_stream_config(mi_controller, eeg_stream)
+                    logger.info(
+                        "[MI-WS] Stream config: device=%s, channels=%s, epoch_samples=%s, source_rate=%sHz, target=%s@%sHz",
+                        stream_cfg["device_type"],
+                        stream_cfg["selected_channels"],
+                        stream_cfg["epoch_samples"],
+                        stream_cfg["source_rate"],
+                        stream_cfg["target_samples"],
+                        stream_cfg["target_rate"],
+                    )
+                    if stream_cfg["n_channels"] != mi_controller.expected_channels:
+                        logger.warning(
+                            "[MI-WS] Stream provides %d MI channels but model expects %d; controller will adapt input.",
+                            stream_cfg["n_channels"],
+                            mi_controller.expected_channels,
+                        )
+
                     mi_processor = MIProcessor(
-                        epoch_samples=750,  # 3 seconds at 250Hz (live stream rate)
-                        n_channels=8,  # Cyton board has 8 EEG channels
-                        target_samples=480,  # Model expects 480 samples (3s at 160Hz)
-                        source_rate=250.0,  # Live stream sampling rate
-                        target_rate=160.0,  # Model training sampling rate
+                        epoch_samples=stream_cfg["epoch_samples"],
+                        n_channels=stream_cfg["n_channels"],
+                        target_samples=stream_cfg["target_samples"],
+                        source_rate=stream_cfg["source_rate"],
+                        target_rate=stream_cfg["target_rate"],
+                        channel_indices=stream_cfg["channel_indices"],
                     )
 
                     def classification_callback(eeg_epoch: np.ndarray):

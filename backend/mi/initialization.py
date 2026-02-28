@@ -114,21 +114,30 @@ def initialize_mi_controller(config: dict, model_path: Path) -> MotorImageryCont
     # Load model
     use_residual = bool(config["model"].get("use_residual", False))
     use_attention = bool(config["model"].get("use_attention", False))
+    configured_n_channels = int(config["model"].get("input_channels", 0))
     architecture_name = "EEGNetResidual" if use_residual else "EEGNet"
     if model_path.exists():
         checkpoint = torch.load(model_path, map_location=device, weights_only=False)
         state_dict = checkpoint.get("model_state_dict", {})
         model_cfg = checkpoint.get("model_config")
         if model_cfg:
-            n_channels = model_cfg["n_channels"]
+            checkpoint_n_channels = int(model_cfg["n_channels"])
+            n_channels = configured_n_channels or checkpoint_n_channels
             n_classes = model_cfg["n_classes"]
             n_samples = model_cfg["n_samples"]
+            if configured_n_channels and configured_n_channels != checkpoint_n_channels:
+                logger.warning(
+                    "Configured MI input_channels=%d overrides checkpoint n_channels=%d. "
+                    "Checkpoint spatial weights will be adapted during load.",
+                    configured_n_channels,
+                    checkpoint_n_channels,
+                )
             logger.info(
                 "Checkpoint found with %d classes (model trained with this many outputs)",
                 n_classes,
             )
         else:
-            n_channels = config["model"]["input_channels"]
+            n_channels = configured_n_channels
             # Use 2 classes to match NeuralFlight training (left/right only)
             n_classes = 2
             logger.warning(

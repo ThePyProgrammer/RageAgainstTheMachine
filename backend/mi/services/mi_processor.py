@@ -1,6 +1,6 @@
 import numpy as np
 import logging
-from typing import Optional, Callable
+from typing import Optional, Callable, Sequence
 from scipy import signal
 
 logger = logging.getLogger(__name__)
@@ -20,6 +20,7 @@ class MIProcessor:
         target_samples: int = 480,
         source_rate: float = 250.0,
         target_rate: float = 160.0,
+        channel_indices: Optional[Sequence[int]] = None,
     ):
         """Initialize MI processor.
 
@@ -29,12 +30,26 @@ class MIProcessor:
             target_samples: Number of samples expected by the model (after resampling)
             source_rate: Sampling rate of live EEG stream (Hz)
             target_rate: Sampling rate model was trained on (Hz)
+            channel_indices: Optional index mapping to reorder/filter incoming channels
         """
         self.epoch_samples = epoch_samples
         self.n_channels = n_channels
         self.target_samples = target_samples
         self.source_rate = source_rate
         self.target_rate = target_rate
+        self.channel_indices = (
+            [int(index) for index in channel_indices]
+            if channel_indices is not None
+            else None
+        )
+        self._max_channel_index = (
+            max(self.channel_indices) if self.channel_indices is not None else None
+        )
+        self.input_channels = (
+            (self._max_channel_index + 1)
+            if self._max_channel_index is not None
+            else n_channels
+        )
         self.buffer = np.zeros((n_channels, 0))
         self.classification_callback: Optional[Callable] = None
         self.epoch_count = 0
@@ -44,6 +59,11 @@ class MIProcessor:
             f"n_channels: {n_channels}, will resample {epoch_samples}@{source_rate}Hz "
             f"to {target_samples}@{target_rate}Hz"
         )
+        if self.channel_indices is not None:
+            logger.info(
+                "[MI-Processor] Applying channel index mapping: %s",
+                self.channel_indices,
+            )
 
     def set_callback(self, callback: Callable):
         """Set callback function to be called when an epoch is ready.
@@ -60,6 +80,21 @@ class MIProcessor:
         Args:
             samples: Filtered EEG data of shape (n_channels, n_samples)
         """
+        if (
+            self.channel_indices is not None
+            and self._max_channel_index is not None
+            and samples.shape[0] <= self._max_channel_index
+        ):
+            logger.warning(
+                "[MI-Processor] Channel mapping requires index %s but only %s channels received",
+                self._max_channel_index,
+                samples.shape[0],
+            )
+            return
+
+        if self.channel_indices is not None:
+            samples = samples[self.channel_indices, :]
+
         if samples.shape[0] != self.n_channels:
             logger.warning(
                 f"[MI-Processor] Channel mismatch: expected {self.n_channels}, "
@@ -138,4 +173,6 @@ class MIProcessor:
             "epochs_processed": self.epoch_count,
             "epoch_samples": self.epoch_samples,
             "n_channels": self.n_channels,
+            "input_channels": self.input_channels,
+            "channel_indices": self.channel_indices,
         }

@@ -8,9 +8,12 @@ Enhanced with:
 - Optional attention mechanism
 """
 
+import logging
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+logger = logging.getLogger(__name__)
 
 
 class EEGNetResidual(nn.Module):
@@ -370,5 +373,57 @@ class EEGClassifier:
     def load(self, path: str):
         """Load model checkpoint."""
         checkpoint = torch.load(path, map_location=self.device, weights_only=False)
-        self.model.load_state_dict(checkpoint["model_state_dict"])
+        checkpoint_state = checkpoint["model_state_dict"]
+        model_state = self.model.state_dict()
+        adapted_state = {}
+
+        for key, tensor in checkpoint_state.items():
+            target = model_state.get(key)
+            if target is None:
+                continue
+
+            if tensor.shape == target.shape:
+                adapted_state[key] = tensor
+                continue
+
+            # Adapt spatial depthwise kernel when channel count differs.
+            if (
+                key == "conv2.weight"
+                and tensor.dim() == 4
+                and target.dim() == 4
+                and tensor.shape[0] == target.shape[0]
+                and tensor.shape[1] == target.shape[1]
+                and tensor.shape[3] == target.shape[3]
+            ):
+                resized = F.interpolate(
+                    tensor,
+                    size=(target.shape[2], target.shape[3]),
+                    mode="bilinear",
+                    align_corners=False,
+                )
+                adapted_state[key] = resized
+                logger.warning(
+                    "Adapted checkpoint %s from shape %s to %s",
+                    key,
+                    tuple(tensor.shape),
+                    tuple(target.shape),
+                )
+                continue
+
+            logger.warning(
+                "Skipping checkpoint tensor %s due to shape mismatch: %s -> %s",
+                key,
+                tuple(tensor.shape),
+                tuple(target.shape),
+            )
+
+        missing_keys, unexpected_keys = self.model.load_state_dict(
+            adapted_state, strict=False
+        )
+        if missing_keys:
+            logger.warning("Missing model keys after checkpoint load: %s", missing_keys)
+        if unexpected_keys:
+            logger.warning(
+                "Unexpected checkpoint keys ignored during load: %s", unexpected_keys
+            )
         self.model.eval()

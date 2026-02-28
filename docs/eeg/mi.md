@@ -8,8 +8,9 @@ The core processing logic is implemented in `backend/mi/services/mi_processor.py
 
 ### 1. Data Buffering and Epoching
 
-- As continuous EEG data is streamed in, the `MIProcessor` collects the samples into a buffer for 8 channels.
-- When the buffer reaches a specific `epoch_samples` threshold (default: 250 samples), the epoch is extracted for processing.
+- As continuous EEG data is streamed in, the `MIProcessor` collects samples using the active device's channel layout.
+- For Muse v1, channels are reordered to `AF7, AF8, TP9, TP10` before buffering and inference.
+- Epoch length is computed from model duration and live sampling rate (for Muse v1: ~768 samples for a 3-second window at 256 Hz).
 
 ### 2. Signal Resampling
 
