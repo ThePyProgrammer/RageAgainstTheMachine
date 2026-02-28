@@ -1,11 +1,12 @@
 import { useState, useEffect } from "react";
-import { CHANNEL_NAMES } from "@/config/eeg";
+import { useDevice } from "@/contexts/DeviceContext";
 import type { ChannelRange, EEGDataPoint } from "@/types/eeg";
 import { calculateChannelStats } from "@/utils/eegMath";
 
 export const useChannelStats = (
   dataBufferRef: React.MutableRefObject<EEGDataPoint[]>,
 ) => {
+  const { deviceConfig } = useDevice();
   const [channelStats, setChannelStats] = useState<
     Record<string, ChannelRange>
   >({});
@@ -18,24 +19,26 @@ export const useChannelStats = (
 
       const newStats: Record<string, ChannelRange> = {};
 
-
-      CHANNEL_NAMES.forEach((ch) => {
+      deviceConfig.channelNames.forEach((ch) => {
         const chKey = `ch${ch}`;
         const chFilteredKey = `fch${ch}`;
         const values = buffer.map(
           (p) => (p[chFilteredKey] as number) ?? (p[chKey] as number) ?? 0,
         );
 
-
-
-        newStats[chKey] = calculateChannelStats(values);
+        newStats[chKey] = calculateChannelStats(
+          values,
+          deviceConfig.maxUv,
+          deviceConfig.railedThresholdPercent,
+          deviceConfig.nearRailedThresholdPercent,
+        );
       });
 
       setChannelStats(newStats);
     }, 250);
 
     return () => clearInterval(interval);
-  }, [dataBufferRef]);
+  }, [dataBufferRef, deviceConfig]);
 
   return channelStats;
 };

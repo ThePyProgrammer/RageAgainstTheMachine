@@ -1,21 +1,14 @@
 import { useState, useRef, useCallback, useEffect } from "react";
-import {
-  CHANNEL_NAMES,
-  MAX_POINTS,
-  ADS1299_MAX_UV,
-  SAMPLING_RATE,
-} from "@/config/eeg";
-import { API_ENDPOINTS } from "@/config/api";
+import { MAX_POINTS } from "@/config/eeg";
+import { API_ENDPOINTS, buildStartUrl } from "@/config/api";
+import { useDevice } from "@/contexts/DeviceContext";
 import type { EEGDataPoint, StreamStatus } from "@/types/eeg";
 import { useChannelStats } from "@/hooks/useChannelStats";
 
-const BASE_COLS = 4;
-const EEG_COLS = 8;
-const ACCEL_COLS = 3;
-const ANALOG_COLS = 3;
-const FILTERED_COLS = 8;
+const BASE_COLS = 4; // sample_index, ts_unix_ms, ts_formatted, marker
 
 export const useBCIStream = () => {
+  const { deviceType, deviceConfig } = useDevice();
   const [displayData, setDisplayData] = useState<EEGDataPoint[]>([]);
   const [status, setStatus] = useState<StreamStatus>("disconnected");
   const [sampleCount, setSampleCount] = useState(0);
@@ -27,32 +20,44 @@ export const useBCIStream = () => {
   const reconnectTimer = useRef<number | null>(null);
   const animationFrameRef = useRef<number | null>(null);
   const timeOffsetRef = useRef(0);
-  const connectRef = useRef<() => void>(() => {});
+  const connectRef = useRef<() => void>(() => { });
   const stopEmbeddingsCallbackRef = useRef<(() => Promise<void>) | null>(null);
   const channelRanges = useChannelStats(dataBufferRef);
+
+  // Derive column layout from device config
+  const eegCols = deviceConfig.channelNames.length;
+  const accelCols = deviceConfig.accelChannels;
+  const analogCols = deviceConfig.analogChannels;
+  const auxCols = deviceConfig.auxChannels;
+  const filteredCols = eegCols;
+  const samplingRate = deviceConfig.samplingRate;
+  const maxUv = deviceConfig.maxUv;
 
   const processIncomingData = useCallback((samples: (number | string)[][]) => {
     const newPoints: EEGDataPoint[] = [];
 
     for (const sample of samples) {
-      if (!sample || sample.length < BASE_COLS + EEG_COLS) continue; // must have base + raw eeg
+      if (!sample || sample.length < BASE_COLS + eegCols) continue;
 
       const point: EEGDataPoint = { time: timeOffsetRef.current };
 
-      const hasAccelAnalog =
-        sample.length >= BASE_COLS + EEG_COLS + ACCEL_COLS + ANALOG_COLS;
-      const filteredIdx = hasAccelAnalog
-        ? BASE_COLS + EEG_COLS + ACCEL_COLS + ANALOG_COLS
-        : -1;
+      // Determine where optional columns start
+      const rawEnd = BASE_COLS + eegCols;
+      const auxEnd = rawEnd + auxCols;
+      const accelEnd = auxEnd + accelCols;
+      const analogEnd = accelEnd + analogCols;
+      const hasExtra = sample.length >= analogEnd;
+
+      const filteredIdx = hasExtra ? analogEnd : -1;
       const railedIdx =
         filteredIdx >= 0 &&
-        sample.length >= filteredIdx + FILTERED_COLS + EEG_COLS
-          ? filteredIdx + FILTERED_COLS
+          sample.length >= filteredIdx + filteredCols + eegCols
+          ? filteredIdx + filteredCols
           : -1;
-      const percentIdx = railedIdx >= 0 ? railedIdx + EEG_COLS : -1;
-      const uvrmsIdx = percentIdx >= 0 ? percentIdx + EEG_COLS : -1;
+      const percentIdx = railedIdx >= 0 ? railedIdx + eegCols : -1;
+      const uvrmsIdx = percentIdx >= 0 ? percentIdx + eegCols : -1;
 
-      CHANNEL_NAMES.forEach((chName, chIdx) => {
+      deviceConfig.channelNames.forEach((chName: string, chIdx: number) => {
         const rawVal = sample[BASE_COLS + chIdx];
         const rawUv = typeof rawVal === "number" ? (rawVal as number) : 0;
         point[`ch${chName}`] = rawUv;
@@ -71,7 +76,7 @@ export const useBCIStream = () => {
 
         const computedPercent = Math.min(
           100,
-          Math.max(0, (Math.abs(rawUv) / ADS1299_MAX_UV) * 100),
+          Math.max(0, (Math.abs(rawUv) / maxUv) * 100),
         );
         const percent =
           typeof percentVal === "number"
@@ -90,7 +95,7 @@ export const useBCIStream = () => {
         point[`uvrms_${chName}`] = uvrms;
       });
 
-      timeOffsetRef.current += 1 / SAMPLING_RATE;
+      timeOffsetRef.current += 1 / samplingRate;
       newPoints.push(point);
     }
 
@@ -100,7 +105,7 @@ export const useBCIStream = () => {
       );
       setSampleCount((prev) => prev + newPoints.length);
     }
-  }, []);
+  }, [eegCols, auxCols, accelCols, analogCols, filteredCols, samplingRate, maxUv, deviceConfig.channelNames]);
 
   const connectWebSocket = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
@@ -140,7 +145,9 @@ export const useBCIStream = () => {
   const executeStreamAction = async (action: "start" | "stop") => {
     try {
       const endpoint =
-        action === "start" ? API_ENDPOINTS.BCI_START : API_ENDPOINTS.BCI_STOP;
+        action === "start"
+          ? buildStartUrl(deviceType)
+          : API_ENDPOINTS.BCI_STOP;
       const response = await fetch(endpoint, { method: "POST" });
 
       // Handle 400 errors gracefully (e.g., trying to stop when not running)
@@ -174,6 +181,14 @@ export const useBCIStream = () => {
       setIsStreaming(false);
     }
   };
+
+  // Clear data buffer when device type changes
+  useEffect(() => {
+    dataBufferRef.current = [];
+    setDisplayData([]);
+    setSampleCount(0);
+    timeOffsetRef.current = 0;
+  }, [deviceType]);
 
   useEffect(() => {
     connectRef.current = connectWebSocket;

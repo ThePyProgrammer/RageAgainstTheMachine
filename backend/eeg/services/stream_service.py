@@ -216,8 +216,54 @@ class EEGStreamer:
         self.ws_broadcaster.unregister_client(websocket)
 
 
-streamer = EEGStreamer()
+# --- Multi-device streamer management ---
+
+_cyton_streamer = EEGStreamer()
+_muse_streamer = None  # Lazy-loaded to avoid import errors when pylsl isn't needed
+_active_device_type = "cyton"
+
+
+def _get_muse_streamer():
+    """Lazy-load MuseStreamer to avoid pylsl import when not needed."""
+    global _muse_streamer
+    if _muse_streamer is None:
+        from eeg.services.muse_stream_service import MuseStreamer
+        _muse_streamer = MuseStreamer()
+    return _muse_streamer
+
+
+def get_streamer_for_device(device_type: str):
+    """Get the streamer instance for a given device type."""
+    if device_type == "cyton":
+        return _cyton_streamer
+    elif device_type == "muse_v1":
+        return _get_muse_streamer()
+    else:
+        raise ValueError(f"Unknown device type: {device_type}")
+
+
+def get_active_streamer():
+    """Get the currently active streamer."""
+    return get_streamer_for_device(_active_device_type)
+
+
+def get_active_device_type() -> str:
+    """Get the currently active device type."""
+    return _active_device_type
+
+
+def set_active_device_type(device_type: str):
+    """Set the active device type. Stops any running streamer first."""
+    global _active_device_type
+    current = get_active_streamer()
+    if current.is_running:
+        current.stop()
+    _active_device_type = device_type
+
+
+# Backward compat: the old singleton
+streamer = _cyton_streamer
 
 
 def get_shared_stream_service():
-    return streamer
+    return get_active_streamer()

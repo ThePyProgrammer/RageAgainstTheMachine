@@ -29,9 +29,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useBCIStream } from "@/hooks/useBCIStream";
+import { useDevice } from "@/contexts/DeviceContext";
 import {
-  CHANNEL_NAMES,
-  CHANNEL_COLORS,
   VERT_SCALES,
   WINDOW_SECONDS,
 } from "@/config/eeg";
@@ -103,6 +102,11 @@ const ChartContainer: React.FC<ChartContainerProps> = ({
 
 const TimeseriesGraph: React.FC = () => {
   const { displayData, sampleCount, channelRanges } = useBCIStream();
+  const { deviceConfig } = useDevice();
+
+  const channelNames = deviceConfig.channelNames;
+  const channelColors = deviceConfig.channelColors;
+  const samplingRate = deviceConfig.samplingRate;
 
   const [vertScale, setVertScale] = useState<number | "auto">(200);
   const [windowSeconds, setWindowSeconds] = useState(5);
@@ -115,7 +119,7 @@ const TimeseriesGraph: React.FC = () => {
   // Use the raw data directly
   const throttledData = displayData;
 
-  const currentRunTime = sampleCount / 250;
+  const currentRunTime = sampleCount / samplingRate;
 
   const handleWindowChange = useCallback((value: string): void => {
     setWindowSeconds(Number(value));
@@ -127,12 +131,12 @@ const TimeseriesGraph: React.FC = () => {
   }, []);
 
   const chartData = useMemo(() => {
-    const pointsToShow = windowSeconds * 250;
+    const pointsToShow = windowSeconds * samplingRate;
     const windowedData = throttledData.slice(-pointsToShow);
     const windowRanges: Record<string, { min: number; max: number }> = {};
 
     return {
-      datasets: CHANNEL_NAMES.map((ch, idx) => {
+      datasets: channelNames.map((ch, idx) => {
         const chKey = `fch${ch}`;
         const channelKey = `ch${ch}`; // Used for metrics key matching
 
@@ -159,7 +163,7 @@ const TimeseriesGraph: React.FC = () => {
         return {
           label: ch,
           data: data,
-          borderColor: CHANNEL_COLORS[idx],
+          borderColor: channelColors[idx],
           borderWidth: 1.5,
           pointRadius: 0,
 
@@ -173,7 +177,7 @@ const TimeseriesGraph: React.FC = () => {
       }),
       windowRanges,
     };
-  }, [throttledData, windowSeconds]);
+  }, [throttledData, windowSeconds, channelNames, channelColors, samplingRate]);
 
   const getChartOptions = (
     scale: number | "auto",
@@ -232,7 +236,7 @@ const TimeseriesGraph: React.FC = () => {
           min: 0,
           max: Math.max(
             chartData.datasets[0]?.data.length || 0,
-            windowSeconds * 250,
+            windowSeconds * samplingRate,
           ),
         },
         y: {
@@ -319,9 +323,9 @@ const TimeseriesGraph: React.FC = () => {
       <div className="flex-1 overflow-hidden flex flex-col">
         <div className="flex-1 flex flex-col">
           {/* 1. Channel List */}
-          {CHANNEL_NAMES.map((ch, idx) => {
+          {channelNames.map((ch, idx) => {
             const channelKey = `ch${ch}`;
-            const color = CHANNEL_COLORS[idx];
+            const color = channelColors[idx];
             const range = channelRanges[channelKey] || {
               min: 0,
               max: 0,
@@ -353,7 +357,7 @@ const TimeseriesGraph: React.FC = () => {
                     className="w-8 h-8 rounded-full flex items-center justify-center text-sm text-white font-bold shadow-sm mb-1 ring-2 ring-white"
                     style={{ backgroundColor: color }}
                   >
-                    {ch}
+                    {ch.length > 3 ? ch.slice(0, 3) : ch}
                   </div>
                 </div>
 
@@ -485,13 +489,12 @@ const TimeseriesGraph: React.FC = () => {
                 {/* Right: Metrics */}
                 <div className="w-35 shrink-0 bg-white/50 border-l border-zinc-200 flex flex-col justify-center px-5 font-mono text-sm">
                   <div
-                    className={`tracking-wide font-bold ${
-                      range.railed
+                    className={`tracking-wide font-bold ${range.railed
                         ? "text-red-600" // RAILED (>90%)
                         : range.railedWarn
                           ? "text-yellow-600" // NEAR RAILED (75-90%)
                           : "text-green-600" // NOT RAILED (<75%)
-                    }`}
+                      }`}
                   >
                     {range.railed
                       ? "RAILED"

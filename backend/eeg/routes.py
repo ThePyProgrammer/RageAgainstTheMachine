@@ -1,10 +1,16 @@
-from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, Query
 from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
 import asyncio
 import logging
 
-from eeg.services.stream_service import streamer
+from eeg.services.stream_service import (
+    get_active_streamer,
+    get_active_device_type,
+    set_active_device_type,
+    get_streamer_for_device,
+)
+from eeg.services.streaming.device_registry import get_device_config, get_available_devices
 from eeg.services.embedding_service import embeddingProcessor
 from eeg.models import EmbeddingConfig
 
@@ -27,10 +33,60 @@ logger = logging.getLogger("eeg.routes")
 # ======================================================
 
 
-@router.post("/start")
-async def start_stream():
-    """Start EEG streaming from hardware."""
+@router.get("/devices")
+async def list_devices():
+    """List all available BCI devices."""
     try:
+        devices = get_available_devices()
+        active = get_active_device_type()
+        return JSONResponse(
+            status_code=200,
+            content=jsonable_encoder({
+                "devices": devices,
+                "active_device": active,
+            }),
+        )
+    except Exception as e:
+        return JSONResponse(
+            status_code=500, content=jsonable_encoder({"error": str(e)})
+        )
+
+
+@router.get("/devices/{device_type}")
+async def get_device_details(device_type: str):
+    """Get detailed configuration for a specific device."""
+    try:
+        config = get_device_config(device_type)
+        return JSONResponse(
+            status_code=200,
+            content=jsonable_encoder(config),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        return JSONResponse(
+            status_code=500, content=jsonable_encoder({"error": str(e)})
+        )
+
+
+@router.post("/start")
+async def start_stream(device_type: str = Query(default=None)):
+    """Start EEG streaming from hardware.
+
+    Args:
+        device_type: Optional device type to use (e.g. 'cyton', 'muse_v1').
+                     If provided, switches the active device before starting.
+    """
+    try:
+        # Switch device if requested
+        if device_type is not None:
+            try:
+                get_device_config(device_type)  # validate
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+            set_active_device_type(device_type)
+
+        streamer = get_active_streamer()
         ok, reason = streamer.start()
         if not ok:
             raise HTTPException(status_code=400, detail=f"Failed to start: {reason}")
@@ -51,7 +107,11 @@ async def start_stream():
 
         return JSONResponse(
             status_code=200,
-            content=jsonable_encoder({"status": "streaming", "reason": reason}),
+            content=jsonable_encoder({
+                "status": "streaming",
+                "reason": reason,
+                "device_type": get_active_device_type(),
+            }),
         )
     except HTTPException:
         raise
@@ -68,6 +128,7 @@ async def start_stream():
 async def stop_stream():
     """Stop EEG streaming."""
     try:
+        streamer = get_active_streamer()
         ok, reason = streamer.stop()
         if not ok:
             raise HTTPException(status_code=400, detail=f"Failed to stop: {reason}")
@@ -87,9 +148,13 @@ async def stop_stream():
 async def get_status():
     """Get current streaming status."""
     try:
+        streamer = get_active_streamer()
         return JSONResponse(
             status_code=200,
-            content=jsonable_encoder({"is_streaming": streamer.is_running}),
+            content=jsonable_encoder({
+                "is_streaming": streamer.is_running,
+                "device_type": get_active_device_type(),
+            }),
         )
     except Exception as e:
         return JSONResponse(
@@ -101,6 +166,7 @@ async def get_status():
 async def get_stream_details():
     """Get detailed streaming session information."""
     try:
+        streamer = get_active_streamer()
         details = streamer.get_session_details()
         return JSONResponse(status_code=200, content=jsonable_encoder(details))
     except Exception as e:
@@ -116,6 +182,7 @@ async def get_stream_details():
 async def configure_embeddings(config: EmbeddingConfig):
     """Configure embedding processing."""
     try:
+        streamer = get_active_streamer()
         if config.enabled:
             embeddingProcessor.load_model(config.checkpoint_path)
             embeddingProcessor.channel_names = config.channel_names
@@ -206,6 +273,7 @@ async def get_embedding_history(n: int = None):
 async def stream_websocket(websocket: WebSocket):
     """WebSocket endpoint for real-time EEG data streaming."""
     await websocket.accept()
+    streamer = get_active_streamer()
     streamer.register_client(websocket)
 
     try:
