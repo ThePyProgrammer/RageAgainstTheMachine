@@ -14,6 +14,26 @@ export type ChannelRange = {
   dcOffsetPercent: number;
 };
 
+export type CommandCentreSignalKey =
+  | "focus"
+  | "alertness"
+  | "drowsiness"
+  | "stress"
+  | "workload"
+  | "engagement"
+  | "relaxation"
+  | "flow"
+  | "frustration";
+
+export type CommandCentreSignals = Record<CommandCentreSignalKey, number>;
+
+export type CommandCentreSignalPacket = {
+  timestampMs: number;
+  signals: CommandCentreSignals;
+  deviceType?: string;
+  raw?: Record<string, number>;
+};
+
 // HeadPlot Model
 export type ElectrodeId = string;
 export type ChannelId = string;

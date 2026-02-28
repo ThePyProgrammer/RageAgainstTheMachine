@@ -10,6 +10,7 @@ export const API_ENDPOINTS = {
   BCI_DETAILS: `${API_BASE_URL}/bci/details`,
   BCI_DEVICES: `${API_BASE_URL}/bci/devices`,
   BCI_WS: `${WS_BASE_URL}/bci/ws`,
+  BCI_CC_SIGNALS_WS: `${WS_BASE_URL}/bci/ccsignals/ws`,
 
   // Model Selection & Embeddings
   MODEL_CONFIGURE: `${API_BASE_URL}/bci/classification/embeddings/configure`,

@@ -57,10 +57,20 @@ class WebSocketBroadcaster:
             return
 
         payload = {"samples": rows}
+        self.broadcast_json(payload)
+
+    def broadcast_json(self, payload):
+        """Broadcast a JSON payload to all connected WebSocket clients."""
+        if not self.clients or self.loop is None:
+            if self._broadcast_count == 0:
+                logger.warning("[Broadcaster] broadcast() called but clients=%d loop=%s",
+                               len(self.clients), self.loop is not None)
+                self._broadcast_count = 1
+            return
 
         if self._broadcast_count % 250 == 0:
-            logger.debug("[Broadcaster] Sending %d rows to %d clients (total broadcasts: %d)",
-                         len(rows), len(self.clients), self._broadcast_count)
+            logger.debug("[Broadcaster] Sending payload to %d clients (total broadcasts: %d)",
+                         len(self.clients), self._broadcast_count)
         self._broadcast_count += 1
 
         for client in self.clients[:]:

@@ -1,5 +1,12 @@
 import { Link } from "react-router-dom";
-import { Brain, Heart, Activity, ArrowRight, BrainCog } from "lucide-react";
+import {
+  Brain,
+  Heart,
+  Activity,
+  ArrowRight,
+  BrainCog,
+  Gauge,
+} from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 
@@ -11,6 +18,13 @@ export default function HomePage() {
       icon: Activity,
       color: "blue",
       path: "/eeg",
+    },
+    {
+      title: "Command Centre",
+      description: "Realtime focus, stress, flow and frustration signals",
+      icon: Gauge,
+      color: "teal",
+      path: "/eeg/command-centre",
     },
     {
       title: "BFM Processor",
@@ -47,6 +61,11 @@ export default function HomePage() {
         hover: "hover:bg-indigo-600",
         icon: "bg-indigo-500",
       },
+      teal: {
+        bg: "from-teal-500 to-teal-600",
+        hover: "hover:bg-teal-600",
+        icon: "bg-teal-500",
+      },
       red: {
         bg: "from-red-500 to-red-600",
         hover: "hover:bg-red-600",
@@ -73,7 +92,7 @@ export default function HomePage() {
           </p>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-5">
           {sections.map((section) => {
             const Icon = section.icon;
             const colors = getColorClasses(section.color);

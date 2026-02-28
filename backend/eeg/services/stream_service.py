@@ -15,6 +15,8 @@ from shared.config.logging import get_logger
 
 from brainflow.data_filter import DataFilter, FilterTypes, DetrendOperations, NoiseTypes
 from eeg.services.streaming.board_manager import BoardManager
+from eeg.services.command_centre_service import CommandCentreSignalProcessor
+from eeg.services.streaming.device_registry import get_device_config
 from eeg.services.streaming.data_processor import DataProcessor
 from eeg.services.streaming.session_manager import SessionManager
 from eeg.services.streaming.websocket_broadcaster import WebSocketBroadcaster
@@ -34,6 +36,12 @@ class EEGStreamer:
         self.data_processor = DataProcessor()
         self.session_manager = None
         self.ws_broadcaster = WebSocketBroadcaster()
+        cyton_cfg = get_device_config("cyton")
+        self.command_centre_processor = CommandCentreSignalProcessor(
+            channel_names=cyton_cfg["eeg_channel_names"],
+            sampling_rate=cyton_cfg["sampling_rate"],
+        )
+        self.cc_broadcaster = WebSocketBroadcaster()
         self.eeg_buffer = None
 
         # Embedding processor for LaBraM
@@ -52,6 +60,7 @@ class EEGStreamer:
             return False, "already_running"
         self.stop_event.clear()
         self.session_start_time = datetime.now()
+        self.command_centre_processor.reset()
         if EEG_DRY_RUN:
             self.is_running = True
             return True, "dry_run"
@@ -182,12 +191,17 @@ class EEGStreamer:
 
                 self.session_manager.append_rows(rows)
                 self.ws_broadcaster.broadcast(broadcast_rows)
+                cc_payload = self.command_centre_processor.update(filtered_chunk)
+                if cc_payload is not None:
+                    cc_payload["device_type"] = "cyton"
+                    self.cc_broadcaster.broadcast_json({"signal": cc_payload})
 
         except Exception as exc:
             error_msg = str(exc)
             logger.error("[EEGStreamer] Error: %s", exc, exc_info=True)
             # Broadcast error to all connected clients
             self.ws_broadcaster.broadcast_error(error_msg)
+            self.cc_broadcaster.broadcast_error(error_msg)
         finally:
             try:
                 self.board_manager.stop()
@@ -214,6 +228,12 @@ class EEGStreamer:
 
     def unregister_client(self, websocket):
         self.ws_broadcaster.unregister_client(websocket)
+
+    def register_cc_client(self, websocket):
+        self.cc_broadcaster.register_client(websocket)
+
+    def unregister_cc_client(self, websocket):
+        self.cc_broadcaster.unregister_client(websocket)
 
 
 # --- Multi-device streamer management ---

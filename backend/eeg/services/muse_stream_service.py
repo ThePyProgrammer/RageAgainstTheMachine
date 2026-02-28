@@ -15,6 +15,7 @@ from pylsl import StreamInlet, resolve_byprop
 
 from brainflow.data_filter import DataFilter, FilterTypes, DetrendOperations, NoiseTypes
 
+from eeg.services.command_centre_service import CommandCentreSignalProcessor
 from eeg.services.streaming.device_registry import get_device_config
 from eeg.services.streaming.session_manager import SessionManager
 from eeg.services.streaming.websocket_broadcaster import WebSocketBroadcaster
@@ -38,6 +39,11 @@ class MuseStreamer:
 
         self.session_manager = None
         self.ws_broadcaster = WebSocketBroadcaster()
+        self.command_centre_processor = CommandCentreSignalProcessor(
+            channel_names=DEVICE_CFG["eeg_channel_names"],
+            sampling_rate=DEVICE_CFG["sampling_rate"],
+        )
+        self.cc_broadcaster = WebSocketBroadcaster()
         self.eeg_buffer = None
         self.inlet = None
 
@@ -66,6 +72,7 @@ class MuseStreamer:
             return False, "already_running"
         self.stop_event.clear()
         self.session_start_time = datetime.now()
+        self.command_centre_processor.reset()
         self.thread = threading.Thread(target=self._stream_loop, daemon=True)
         self.thread.start()
         self.is_running = True
@@ -85,6 +92,12 @@ class MuseStreamer:
 
     def unregister_client(self, websocket):
         self.ws_broadcaster.unregister_client(websocket)
+
+    def register_cc_client(self, websocket):
+        self.cc_broadcaster.register_client(websocket)
+
+    def unregister_cc_client(self, websocket):
+        self.cc_broadcaster.unregister_client(websocket)
 
     # ------------------------------------------------------------------
     # Internal streaming loop
@@ -233,11 +246,16 @@ class MuseStreamer:
 
                 self.session_manager.append_rows(rows)
                 self.ws_broadcaster.broadcast(broadcast_rows)
+                cc_payload = self.command_centre_processor.update(filtered_chunk)
+                if cc_payload is not None:
+                    cc_payload["device_type"] = "muse_v1"
+                    self.cc_broadcaster.broadcast_json({"signal": cc_payload})
 
         except Exception as exc:
             error_msg = str(exc)
             logger.error("[MuseStreamer] Error: %s", exc, exc_info=True)
             self.ws_broadcaster.broadcast_error(error_msg)
+            self.cc_broadcaster.broadcast_error(error_msg)
         finally:
             if self.inlet:
                 try:
