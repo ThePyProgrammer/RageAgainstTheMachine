@@ -1,0 +1,135 @@
+import { describe, expect, it } from "vitest";
+import { BALL_SPEED_X, BALL_SPEED_Y, stepPongPhysics } from "../src/features/pong/game/gameLoop";
+import type { GameInputState, RuntimeState } from "../src/features/pong/types/pongRuntime";
+
+const createRuntimeState = (overrides?: Partial<RuntimeState>): RuntimeState => ({
+  width: 960,
+  height: 540,
+  ball: { x: 480, y: 270, radius: 10 },
+  leftPaddle: { x: 20, y: 215, width: 14, height: 110 },
+  rightPaddle: { x: 926, y: 215, width: 14, height: 110 },
+  playerScore: 0,
+  aiScore: 0,
+  ...(overrides ?? {}),
+});
+
+const neutralInput = (): GameInputState => ({
+  up: false,
+  down: false,
+  left: false,
+  right: false,
+  pointerX: 0,
+  pointerY: 0,
+});
+
+describe("pong physics step", () => {
+  it("crosses the field midline within deterministic ticks", () => {
+    const state = createRuntimeState({
+      ball: { x: 100, y: 60, radius: 10 },
+    });
+    const input = neutralInput();
+    let ballVX = BALL_SPEED_X;
+    let ballVY = BALL_SPEED_Y;
+    let crossedMidline = false;
+
+    for (let i = 0; i < 240; i += 1) {
+      const step = stepPongPhysics(state, input, "paddle", ballVX, ballVY);
+      ballVX = step.ballVX;
+      ballVY = step.ballVY;
+      if (state.ball.x >= state.width / 2) {
+        crossedMidline = true;
+        break;
+      }
+    }
+
+    expect(crossedMidline).toBe(true);
+  });
+
+  it("inverts ball velocity only on wall/paddle contacts", () => {
+    const topState = createRuntimeState({
+      ball: { x: 480, y: 1, radius: 10 },
+    });
+    const input = neutralInput();
+    const top = stepPongPhysics(topState, input, "paddle", BALL_SPEED_X, -170);
+    expect(top.ballVY).toBeGreaterThan(0);
+    expect(top.metrics.collisionResolvedCount).toBeGreaterThan(0);
+    expect(top.metrics.collisionNormals.some((normal) => normal.x === 0 && normal.y === 1)).toBe(true);
+
+    const paddleState = createRuntimeState({
+      ball: { x: 44, y: 250, radius: 10 },
+    });
+    const paddleHit = stepPongPhysics(paddleState, input, "paddle", -BALL_SPEED_X, BALL_SPEED_Y);
+    expect(paddleHit.ballVX).toBeGreaterThan(0);
+    expect(paddleHit.metrics.collisionResolvedCount).toBeGreaterThan(0);
+    expect(paddleHit.metrics.collisionNormals.some((normal) => normal.x === 1 && normal.y === 0)).toBe(
+      true,
+    );
+  });
+
+  it("expands ball bounding box beyond threshold across time (no micro-bounce)", () => {
+    const state = createRuntimeState({
+      width: 15000,
+      height: 1200,
+      ball: { x: 7500, y: 300, radius: 10 },
+      leftPaddle: { x: 20, y: 450, width: 14, height: 110 },
+      rightPaddle: { x: 14966, y: 450, width: 14, height: 110 },
+    });
+
+    let minX = state.ball.x;
+    let maxX = state.ball.x;
+    let minY = state.ball.y;
+    let maxY = state.ball.y;
+    let ballVX = BALL_SPEED_X;
+    let ballVY = BALL_SPEED_Y;
+    const input = neutralInput();
+
+    for (let i = 0; i < 1200; i += 1) {
+      const step = stepPongPhysics(state, input, "paddle", ballVX, ballVY);
+      ballVX = step.ballVX;
+      ballVY = step.ballVY;
+      minX = Math.min(minX, state.ball.x);
+      maxX = Math.max(maxX, state.ball.x);
+      minY = Math.min(minY, state.ball.y);
+      maxY = Math.max(maxY, state.ball.y);
+    }
+
+    expect(maxX - minX).toBeGreaterThan(state.width * 0.2);
+    expect(maxY - minY).toBeGreaterThan(state.height * 0.2);
+  });
+
+  it("keeps physics deterministic across repeated runs", () => {
+    const stateA = createRuntimeState({
+      ball: { x: 300, y: 180, radius: 10 },
+      leftPaddle: { x: 20, y: 500, width: 14, height: 110 },
+      rightPaddle: { x: 926, y: 500, width: 14, height: 110 },
+    });
+    const stateB = createRuntimeState({
+      ball: { x: 300, y: 180, radius: 10 },
+      leftPaddle: { x: 20, y: 500, width: 14, height: 110 },
+      rightPaddle: { x: 926, y: 500, width: 14, height: 110 },
+    });
+    const input = neutralInput();
+
+    let stateABallVX = BALL_SPEED_X;
+    let stateABallVY = BALL_SPEED_Y;
+    let stateBBallVX = BALL_SPEED_X;
+    let stateBBallVY = BALL_SPEED_Y;
+
+    for (let i = 0; i < 240; i += 1) {
+      const stepA = stepPongPhysics(stateA, input, "paddle", stateABallVX, stateABallVY);
+      const stepB = stepPongPhysics(stateB, input, "paddle", stateBBallVX, stateBBallVY);
+
+      stateABallVX = stepA.ballVX;
+      stateABallVY = stepA.ballVY;
+      stateBBallVX = stepB.ballVX;
+      stateBBallVY = stepB.ballVY;
+
+      expect(stepA.ballVX).toBe(stepB.ballVX);
+      expect(stepA.ballVY).toBe(stepB.ballVY);
+      expect(stateA.ball.x).toBe(stateB.ball.x);
+      expect(stateA.ball.y).toBe(stateB.ball.y);
+      expect(stateA.playerScore).toBe(stateB.playerScore);
+      expect(stateA.aiScore).toBe(stateB.aiScore);
+    }
+  });
+});

@@ -1,0 +1,23 @@
+{
+  "name": "@ragemachine/bci-shared",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./src/index.ts",
+  "module": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "import": "./src/index.ts",
+      "types": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "test": "echo \"No tests configured for bci-shared yet\""
+  },
+  "devDependencies": {
+    "typescript": "~5.9.3",
+    "@types/node": "^24.10.1"
+  }
+}

@@ -1,5 +1,8 @@
+const RAW_API_BASE_URL = import.meta.env.VITE_BACKEND_URL;
+const FALLBACK_API_BASE_URL = "http://localhost:8000";
+
 // API Configuration
-export const API_BASE_URL = import.meta.env.VITE_BACKEND_URL;
+export const API_BASE_URL = RAW_API_BASE_URL || FALLBACK_API_BASE_URL;
 export const WS_BASE_URL = API_BASE_URL.replace(/^http/, "ws");
 
 // Backend API Endpoints

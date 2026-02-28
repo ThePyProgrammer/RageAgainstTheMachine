@@ -4,14 +4,17 @@ import BFMPage from "@/pages/BrainFoundationModelPage";
 import PulseDetectorPage from "@/pages/WebcamPage";
 import MotorImageryPage from "@/pages/MotorImageryPage";
 import CommandCentreSignalsPage from "@/pages/CommandCentreSignalsPage";
+import Combat3DPage from "@/pages/Combat3DPage";
 import {
   Activity,
   Heart,
   Brain,
   BrainCog,
   Gauge,
+  Gamepad2,
 } from "lucide-react";
 import type { ComponentType } from "react";
+import PongPage from "@/pages/PongPage";
 
 export type AppRoute = {
   path: string;
@@ -84,5 +87,20 @@ export const routes: AppRoute[] = [
       { name: "Home", path: "/" },
       { name: "Motor Imagery", path: "/mi" },
     ],
+  },
+  {
+    path: "/pong",
+    label: "Pong",
+    element: PongPage,
+    icon: Gamepad2,
+    nav: true,
+    breadcrumbs: [{ name: "Home", path: "/" }, { name: "Pong", path: "/pong" }],
+  },
+  {
+    path: "/combat3d",
+    label: "Combat 3D",
+    element: Combat3DPage,
+    nav: true,
+    breadcrumbs: [{ name: "Home", path: "/" }, { name: "Combat 3D", path: "/combat3d" }],
   },
 ];

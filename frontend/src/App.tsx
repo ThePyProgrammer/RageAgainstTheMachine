@@ -1,4 +1,4 @@
-import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
+import { BrowserRouter as Router, Navigate, Routes, Route } from "react-router-dom";
 import DashboardLayout from "@/layouts/DashboardLayout";
 import { routes } from "@/config/routes";
 import { ElectrodeMappingProvider } from "@/contexts/ElectrodeMappingContext";
@@ -18,6 +18,7 @@ function App() {
                   {routes.map(({ path, element: Element }) => (
                     <Route key={path} path={path} element={<Element />} />
                   ))}
+                  <Route path="*" element={<Navigate to="/" replace />} />
                 </Route>
               </Routes>
             </Router>
