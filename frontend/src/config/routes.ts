@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import type { ComponentType } from "react";
 import PongPage from "@/pages/PongPage";
+import BreakoutPage from "@/pages/BreakoutPage";
 
 export type AppRoute = {
   path: string;
@@ -95,6 +96,14 @@ export const routes: AppRoute[] = [
     icon: Gamepad2,
     nav: true,
     breadcrumbs: [{ name: "Home", path: "/" }, { name: "Pong", path: "/pong" }],
+  },
+  {
+    path: "/breakout",
+    label: "Breakout",
+    element: BreakoutPage,
+    icon: Gamepad2,
+    nav: true,
+    breadcrumbs: [{ name: "Home", path: "/" }, { name: "Breakout", path: "/breakout" }],
   },
   {
     path: "/combat3d",

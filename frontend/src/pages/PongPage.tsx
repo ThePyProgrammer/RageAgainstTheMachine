@@ -17,6 +17,7 @@ import type { DebugStats, GameScreen, RuntimeState } from "@/features/pong/types
 import { useAIOpponent } from "@/hooks/useAIOpponent";
 import { useBCIStream } from "@/hooks/useBCIStream";
 import type { OpponentInputMode } from "@/hooks/useAIOpponent";
+import { EEGStreamModal } from "@/combat3d/ui/EEGStreamModal";
 
 type CalibrationStep = "left" | "right" | "fine_tuning" | "complete" | "error";
 type BallControlMode = "paddle" | "ball";
@@ -40,6 +41,16 @@ type KeyboardMovementState = {
   down: boolean;
 };
 type MovementStateKey = keyof KeyboardMovementState;
+type EegHemisphere = "left" | "right";
+
+interface EegPaneState {
+  waveSamples: number[];
+  leftPower: number;
+  rightPower: number;
+  confidence: number;
+  packetRateHz: number;
+  activeHemisphere: EegHemisphere;
+}
 
 const LEFT_TRIAL_MS = 7000;
 const RIGHT_TRIAL_MS = 7000;
@@ -81,6 +92,26 @@ const sleep = (ms: number) =>
   new Promise<void>((resolve) => {
     window.setTimeout(resolve, ms);
   });
+
+const clamp01 = (value: number): number => Math.max(0, Math.min(1, value));
+const clampSignal = (value: number): number => Math.max(-1, Math.min(1, value));
+const EEG_WAVE_POINTS= 42;
+const EEG_STREAM_STALE_MS = 1800;
+
+const createDefaultWave = (phase = 0): number[] =>
+  Array.from(
+    { length: EEG_WAVE_POINTS },
+    (_, index) => Math.sin(phase + (index / EEG_WAVE_POINTS) * Math.PI * 3.5) * 0.16,
+  );
+
+const createInitialEegPaneState = (): EegPaneState => ({
+  waveSamples: createDefaultWave(),
+  leftPower: 0.58,
+  rightPower: 0.2,
+  confidence: 0,
+  packetRateHz: 0,
+  activeHemisphere: "left",
+});
 
 const mapCommandToPaddle = (command: unknown): PaddleCommand => {
   const normalized = String(command ?? "").toLowerCase();
@@ -205,6 +236,7 @@ export default function PongPage() {
   const [capturedKeyboardEegSamples, setCapturedKeyboardEegSamples] = useState(0);
   const [captureNotice, setCaptureNotice] = useState<string | null>(null);
   const [captureBusy, setCaptureBusy] = useState(false);
+  const [eegPane, setEegPane] = useState<EegPaneState>(() => createInitialEegPaneState());
 
   const debugRef = useRef<DebugStats>(INITIAL_DEBUG);
   const runtimeRef = useRef<RuntimeState>(createRuntimeState());
@@ -232,6 +264,13 @@ export default function PongPage() {
   >([]);
   const captureDirectionIndexRef = useRef(0);
   const isCapturingRef = useRef(false);
+  const eegLastPacketAtRef = useRef(0);
+  const eegPacketRateWindowRef = useRef({
+    windowStartMs: performance.now(),
+    packetCount: 0,
+    packetRateHz: 0,
+  });
+  const eegWavePhaseRef = useRef(0);
 
   const logOpponent = useCallback((label: string, payload: Record<string, unknown>) => {
     if (!OPPONENT_DEBUG) {
@@ -245,6 +284,34 @@ export default function PongPage() {
       ...debugRef.current,
       ...next,
     };
+  }, []);
+
+  const pushEegSample = useCallback(
+    (
+      sample: number,
+      patch: Partial<Omit<EegPaneState, "waveSamples">> = {},
+    ) => {
+      setEegPane((current) => ({
+        ...current,
+        ...patch,
+        waveSamples: [
+          ...current.waveSamples.slice(-(EEG_WAVE_POINTS - 1)),
+          clampSignal(sample),
+        ],
+      }));
+    },
+    [],
+  );
+
+  const resetEegPane = useCallback(() => {
+    eegLastPacketAtRef.current = 0;
+    eegPacketRateWindowRef.current = {
+      windowStartMs: performance.now(),
+      packetCount: 0,
+      packetRateHz: 0,
+    };
+    eegWavePhaseRef.current = 0;
+    setEegPane(createInitialEegPaneState());
   }, []);
 
   const resetOpponentFeedback = useCallback(() => {
@@ -354,9 +421,10 @@ export default function PongPage() {
         ws.close();
       }
       setEegCommand("none");
+      resetEegPane();
       publishDebug({ thonkConnected: false });
     },
-    [publishDebug],
+    [publishDebug, resetEegPane],
   );
 
   const applyEegCommand = useCallback((command: PaddleCommand) => {
@@ -600,7 +668,7 @@ export default function PongPage() {
         }
       };
     });
-  }, [applyEegCommand, publishDebug, teardownMiSocket]);
+  }, [publishDebug, teardownMiSocket]);
 
   const waitWithProgress = useCallback(async (durationMs: number, start: number, end: number) => {
     const startedAt = performance.now();
@@ -953,6 +1021,33 @@ export default function PongPage() {
   }, [screen]);
 
   useEffect(() => {
+    const interval = window.setInterval(() => {
+      if (screen !== "game" && screen !== "paused") {
+        return;
+      }
+
+      const now = performance.now();
+      if (now - eegLastPacketAtRef.current <= EEG_STREAM_STALE_MS) {
+        return;
+      }
+
+      eegWavePhaseRef.current += 0.34;
+      const phase = eegWavePhaseRef.current;
+      const sample = Math.sin(phase) * 0.21 + Math.sin(phase * 0.45) * 0.09;
+
+      pushEegSample(sample, {
+        leftPower: 0.58,
+        rightPower: 0.2,
+        confidence: 0,
+        packetRateHz: 0,
+        activeHemisphere: "left",
+      });
+    }, 120);
+
+    return () => window.clearInterval(interval);
+  }, [pushEegSample, screen]);
+
+  useEffect(() => {
     return () => {
       teardownMiSocket(true);
     };
@@ -1038,6 +1133,15 @@ export default function PongPage() {
             accentColor={scoreboardAccent}
           />
           <StressMeter stressLevel={stressLevel} />
+          <EEGStreamModal
+            waveSamples={eegPane.waveSamples}
+            leftPower={eegPane.leftPower}
+            rightPower={eegPane.rightPower}
+            confidence={eegPane.confidence}
+            packetRateHz={eegPane.packetRateHz}
+            activeHemisphere={eegPane.activeHemisphere}
+            mode="classifier"
+          />
           {activeTaunt && (
             <TauntBubble
               text={activeTaunt.text}
@@ -1082,6 +1186,33 @@ export default function PongPage() {
               )}
             </div>
           )}
+          <div className="absolute top-2 right-2 z-40 flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => {
+                teardownMiSocket(true);
+                setScreen("menu");
+                pausedRef.current = false;
+              }}
+              style={{ fontSize: 18 }}
+              className="rounded px-2 py-0.5 text-white/60 hover:text-white bg-black/50 hover:bg-black/80 border border-white/20 leading-none"
+              title="Quit to menu (Esc)"
+            >
+              ✕
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                pausedRef.current = !pausedRef.current;
+                setScreen(pausedRef.current ? "paused" : "game");
+              }}
+              style={{ fontSize: 18 }}
+              className="rounded px-2 py-0.5 text-white/60 hover:text-white bg-black/50 hover:bg-black/80 border border-white/20 leading-none"
+              title={screen === "paused" ? "Resume (P)" : "Pause (P)"}
+            >
+              {screen === "paused" ? "▶" : "⏸"}
+            </button>
+          </div>
         </section>
       )}
 
