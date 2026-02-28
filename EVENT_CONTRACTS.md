@@ -13,6 +13,7 @@ Endpoint: `/opponent/ws`
   "type": "game_event",
   "event_id": "evt-1",
   "game_mode": "pong",
+  "input_mode": "keyboard_paddle",
   "event": "player_score",
   "score": { "player": 3, "ai": 2 },
   "current_difficulty": 0.62,
@@ -50,8 +51,10 @@ Endpoint: `/opponent/ws`
 ### Notes
 
 - Opponent events are validated server-side with Pydantic models in `backend/opponent/models.py`.
-- Command-centre metrics are backend-authoritative and sourced from live EEG streamers.
+- For `input_mode=eeg` (or omitted), command-centre metrics are backend-authoritative and sourced from live EEG streamers.
+- For `input_mode=keyboard_paddle|keyboard_ball`, backend uses session-scoped synthetic metrics (bounded random walk with event bias).
 - Difficulty updates still flow even when taunt/speech is rate-limited or OpenAI calls fail.
+- Difficulty ramps are asymmetric: default upward cap `+0.05`, evidence-based upward cap `+0.08`, downward cap `-0.10`.
 
 ## Type Definitions
 
