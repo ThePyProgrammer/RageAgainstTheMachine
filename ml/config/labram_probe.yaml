@@ -1,0 +1,83 @@
+# LaBraM Probe Configuration
+
+dataset:
+  name: "PhysioNet Motor Imagery"
+  url: "https://physionet.org/files/eegmmidb/1.0.0/"
+  train_subjects:
+    [
+      1,
+      2,
+      3,
+      4,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29,
+      30,
+      31,
+      32,
+      33,
+      34,
+      35,
+      36,
+      37,
+      38,
+      39,
+      40,
+    ]
+  val_subjects: [41, 42, 43, 44, 45, 46, 47, 48, 49, 50]
+  runs: [4, 8, 12] # Motor IMAGERY of left/right hand
+  event_keys: ["T0", "T1", "T2"] # Rest, left, right
+
+preprocessing:
+  sampling_rate: 160 # Hz (raw dataset)
+  target_sampling_rate: 200 # Hz (LaBraM expected)
+  lowcut: 8.0
+  highcut: 30.0
+  channels: "all" # Use all available EEG electrodes from each subject
+
+labels:
+  event_to_class:
+    T1: 0 # left
+    T2: 1 # right
+    T0: 2 # rest
+  class_names:
+    0: "left"
+    1: "right"
+    2: "rest"
+
+model:
+  checkpoint_path: "../backend/eeg/models/classification/pretrained/labram/labram-base.pth"
+  num_classes: 3
+  freeze_encoder: true
+  pooling: "mean"
+  hidden_dim: 256
+  dropout: 0.3
+
+training:
+  batch_size: 32
+  learning_rate: 0.001
+  num_epochs: 200
+  early_stopping_patience: 40
+  savedir: _archive/mi/models/labram_probe
+  savename: labram_probe_best.pth

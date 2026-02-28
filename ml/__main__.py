@@ -10,10 +10,10 @@ import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
 from tqdm import tqdm
 
-from mi.eeg.dataset import PhysioNetDataset, preprocess_eeg
-from mi.models.eegnet import EEGClassifier, EEGNet
-from mi.models.eegnet_residual import EEGNetResidual
-from mi.utils.config_loader import get_project_root, load_config
+from eeg.dataset import PhysioNetDataset, preprocess_eeg
+from models.eegnet import EEGClassifier, EEGNet
+from models.eegnet_residual import EEGNetResidual
+from utils.config_loader import get_project_root, load_config
 
 
 def prepare_data(config: dict):
