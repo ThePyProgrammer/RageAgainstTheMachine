@@ -1,0 +1,6 @@
+[submodule "backend/external/rPPG-Toolbox"]
+	path = backend/external/rPPG-Toolbox
+	url = https://github.com/ubicomplab/rPPG-Toolbox.git
+[submodule "backend/external/meye"]
+	path = backend/external/meye
+	url = https://github.com/fabiocarrara/meye.git
