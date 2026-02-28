@@ -117,9 +117,22 @@ def _build_dataset(
     highcut: float,
     target_samples: int,
 ) -> tuple[np.ndarray, np.ndarray]:
-    csv_files = sorted(data_dir.glob("*.csv"))
+    csv_files = sorted(
+        p
+        for p in data_dir.rglob("*")
+        if p.is_file()
+        and p.suffix.lower() == ".csv"
+        and ("left" in p.stem.lower() or "right" in p.stem.lower())
+    )
     if not csv_files:
-        raise FileNotFoundError(f"No CSV files found in {data_dir}")
+        raise FileNotFoundError(
+            "No labeled calibration CSV files found in "
+            f"{data_dir}. Expected filenames containing 'left' or 'right'."
+        )
+
+    print(f"Discovered {len(csv_files)} calibration CSV file(s):")
+    for csv_path in csv_files:
+        print(f"  - {csv_path.name}")
 
     all_x = []
     all_y = []
@@ -170,6 +183,33 @@ def _split_train_val(
 
     val_idx = indices[:n_val]
     train_idx = indices[n_val:]
+    return X[train_idx], y[train_idx], X[val_idx], y[val_idx]
+
+
+def _split_train_val_stratified(
+    X: np.ndarray, y: np.ndarray, val_split: float, seed: int
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    if len(X) < 2:
+        raise ValueError("Need at least 2 epochs for train/val split.")
+
+    rng = np.random.default_rng(seed)
+    class_labels = np.unique(y)
+    train_indices = []
+    val_indices = []
+
+    for cls in class_labels:
+        cls_idx = np.where(y == cls)[0]
+        cls_idx = rng.permutation(cls_idx)
+        n_val_cls = max(1, int(round(len(cls_idx) * val_split)))
+        if len(cls_idx) > 1:
+            n_val_cls = min(n_val_cls, len(cls_idx) - 1)
+        val_indices.append(cls_idx[:n_val_cls])
+        train_indices.append(cls_idx[n_val_cls:])
+
+    train_idx = np.concatenate(train_indices)
+    val_idx = np.concatenate(val_indices)
+    train_idx = rng.permutation(train_idx)
+    val_idx = rng.permutation(val_idx)
     return X[train_idx], y[train_idx], X[val_idx], y[val_idx]
 
 
@@ -249,6 +289,21 @@ def main() -> None:
     parser.add_argument("--learning-rate", type=float, default=1e-4)
     parser.add_argument("--weight-decay", type=float, default=1e-4)
     parser.add_argument("--val-split", type=float, default=0.2)
+    parser.add_argument(
+        "--stratified-split",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Use class-stratified train/val splitting when validation is enabled.",
+    )
+    parser.add_argument(
+        "--use-all-data",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "If enabled, train on all available epochs (no validation split). "
+            "Disable with --no-use-all-data to keep a validation holdout."
+        ),
+    )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
         "--window-seconds",
@@ -267,6 +322,12 @@ def main() -> None:
     parser.add_argument("--dropout", type=float, default=0.5)
     parser.add_argument("--kernel-length", type=int, default=64)
     parser.add_argument("--use-attention", action="store_true")
+    parser.add_argument(
+        "--class-weighted-loss",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Use inverse-frequency class weights in cross-entropy loss.",
+    )
     parser.add_argument(
         "--freeze-early",
         action="store_true",
@@ -325,12 +386,28 @@ def main() -> None:
         highcut=args.highcut,
         target_samples=target_samples,
     )
-    X_train, y_train, X_val, y_val = _split_train_val(
-        X, y, val_split=args.val_split, seed=args.seed
-    )
+
+    use_all_data = bool(args.use_all_data)
+    if use_all_data:
+        X_train, y_train = X, y
+        X_val = np.empty((0, X.shape[1], X.shape[2]), dtype=X.dtype)
+        y_val = np.empty((0,), dtype=y.dtype)
+        print("Training mode: using all data (no validation split).")
+    else:
+        if args.stratified_split:
+            X_train, y_train, X_val, y_val = _split_train_val_stratified(
+                X, y, val_split=args.val_split, seed=args.seed
+            )
+            split_mode = "stratified train/val split"
+        else:
+            X_train, y_train, X_val, y_val = _split_train_val(
+                X, y, val_split=args.val_split, seed=args.seed
+            )
+            split_mode = "random train/val split"
+        print(f"Training mode: {split_mode} with val_split={args.val_split:.2f}")
 
     print(
-        f"Dataset: train={len(X_train)} val={len(X_val)} "
+        f"Dataset: total={len(X)} train={len(X_train)} val={len(X_val)} "
         f"shape={X_train.shape[1:]} classes(train)={np.bincount(y_train)}"
     )
 
@@ -341,19 +418,36 @@ def main() -> None:
     train_dataset = TensorDataset(
         torch.from_numpy(X_train), torch.from_numpy(y_train).long()
     )
-    val_dataset = TensorDataset(
-        torch.from_numpy(X_val), torch.from_numpy(y_val).long()
-    )
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False)
+    has_val = len(X_val) > 0
+    if has_val:
+        val_dataset = TensorDataset(
+            torch.from_numpy(X_val), torch.from_numpy(y_val).long()
+        )
+        val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False)
+    else:
+        val_loader = None
 
-    criterion = nn.CrossEntropyLoss()
+    if args.class_weighted_loss:
+        n_classes = int(classifier.model.n_classes)
+        class_counts = np.bincount(y_train, minlength=n_classes).astype(np.float32)
+        class_weights = (class_counts.sum() / np.maximum(class_counts, 1.0)) / float(
+            n_classes
+        )
+        criterion = nn.CrossEntropyLoss(
+            weight=torch.tensor(class_weights, dtype=torch.float32, device=device)
+        )
+        print(f"Loss mode: class-weighted CE, weights={class_weights.tolist()}")
+    else:
+        criterion = nn.CrossEntropyLoss()
+        print("Loss mode: standard CE")
     trainable_params = [p for p in classifier.model.parameters() if p.requires_grad]
     optimizer = optim.Adam(
         trainable_params, lr=args.learning_rate, weight_decay=args.weight_decay
     )
 
     best_val_acc = -1.0
+    best_train_loss = float("inf")
     best_epoch = -1
     output_checkpoint.parent.mkdir(parents=True, exist_ok=True)
 
@@ -377,39 +471,51 @@ def main() -> None:
             train_correct += int((preds == yb).sum().item())
             train_total += int(yb.numel())
 
-        classifier.model.eval()
-        val_losses = []
-        val_correct = 0
-        val_total = 0
-        with torch.no_grad():
-            for xb, yb in val_loader:
-                xb = xb.to(device).float()
-                yb = yb.to(device)
-                logits = classifier.model(xb)
-                loss = criterion(logits, yb)
-                val_losses.append(float(loss.item()))
-                preds = logits.argmax(1)
-                val_correct += int((preds == yb).sum().item())
-                val_total += int(yb.numel())
-
         train_loss = float(np.mean(train_losses)) if train_losses else 0.0
-        val_loss = float(np.mean(val_losses)) if val_losses else 0.0
         train_acc = train_correct / max(train_total, 1)
-        val_acc = val_correct / max(val_total, 1)
+        if has_val:
+            classifier.model.eval()
+            val_losses = []
+            val_correct = 0
+            val_total = 0
+            with torch.no_grad():
+                for xb, yb in val_loader:
+                    xb = xb.to(device).float()
+                    yb = yb.to(device)
+                    logits = classifier.model(xb)
+                    loss = criterion(logits, yb)
+                    val_losses.append(float(loss.item()))
+                    preds = logits.argmax(1)
+                    val_correct += int((preds == yb).sum().item())
+                    val_total += int(yb.numel())
 
-        print(
-            f"Epoch {epoch + 1:03d}/{args.epochs} | "
-            f"train_loss={train_loss:.4f} train_acc={train_acc:.4f} | "
-            f"val_loss={val_loss:.4f} val_acc={val_acc:.4f}"
-        )
+            val_loss = float(np.mean(val_losses)) if val_losses else 0.0
+            val_acc = val_correct / max(val_total, 1)
+            print(
+                f"Epoch {epoch + 1:03d}/{args.epochs} | "
+                f"train_loss={train_loss:.4f} train_acc={train_acc:.4f} | "
+                f"val_loss={val_loss:.4f} val_acc={val_acc:.4f}"
+            )
 
-        if val_acc > best_val_acc:
-            best_val_acc = val_acc
-            best_epoch = epoch + 1
-            classifier.save(str(output_checkpoint))
+            if val_acc > best_val_acc:
+                best_val_acc = val_acc
+                best_epoch = epoch + 1
+                classifier.save(str(output_checkpoint))
+        else:
+            print(
+                f"Epoch {epoch + 1:03d}/{args.epochs} | "
+                f"train_loss={train_loss:.4f} train_acc={train_acc:.4f}"
+            )
+            if train_loss < best_train_loss:
+                best_train_loss = train_loss
+                best_epoch = epoch + 1
+                classifier.save(str(output_checkpoint))
 
     print(f"\nSaved best tuned checkpoint to: {output_checkpoint}")
-    print(f"Best val acc: {best_val_acc:.4f} at epoch {best_epoch}")
+    if has_val:
+        print(f"Best val acc: {best_val_acc:.4f} at epoch {best_epoch}")
+    else:
+        print(f"Best train loss: {best_train_loss:.4f} at epoch {best_epoch}")
 
 
 if __name__ == "__main__":
