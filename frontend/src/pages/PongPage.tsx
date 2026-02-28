@@ -57,7 +57,7 @@ const PROGRESS_TICK_MS = 120;
 const DEFAULT_STRESS_LEVEL = 0.24;
 const INITIAL_OPPONENT_DIFFICULTY = 0.5;
 const OPPONENT_DEBUG = import.meta.env.DEV;
-const EEG_WS_INTERVAL_MS = 120;
+const EEG_WS_INTERVAL_MS = 50;
 const EEG_COMMAND_HOLD_MS = 900;
 const EEG_MIN_CONFIDENCE = 56;
 const KEY_TIMELINE_RETENTION = 2000;
@@ -645,7 +645,7 @@ export default function PongPage() {
           }
 
           const normalizedConfidence = Number.isFinite(confidence)
-            ? clamp01(confidence > 1 ? confidence / 100 : confidence)
+            ? Math.max(0, Math.min(confidence > 1 ? confidence / 100 : confidence, 1))
             : 0;
           const activeHemisphere: EegHemisphere = nextCommand === "right" ? "right" : "left";
           const leftPower = activeHemisphere === "left"
