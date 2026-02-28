@@ -220,9 +220,9 @@ def initialize():
         logger.info(f"Model ready at {model_path}")
 
         # Preload test data (this triggers download if needed)
-        logger.info("Loading test data...")
-        test_data_X, test_data_y = preload_test_data(config)
-        logger.info(f"Test data loaded: {len(test_data_X)} epochs")
+        # logger.info("Loading test data...")
+        # test_data_X, test_data_y = preload_test_data(config)
+        # logger.info(f"Test data loaded: {len(test_data_X)} epochs")
 
         # Initialize controller
         logger.info("Initializing controller...")
