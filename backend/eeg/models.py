@@ -20,7 +20,7 @@ class EmbeddingConfig(BaseModel):
 
     enabled: bool
     checkpoint_path: str = Field(
-        default="eeg/models/classification/labram.pth"
+        default="eeg/models/classification/pretrained/labram/labram-base.pth"
     )
     channel_names: Optional[list[str]] = Field(default=None)
     channel_mapping: Optional[dict[str, str]] = Field(

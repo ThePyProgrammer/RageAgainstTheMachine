@@ -14,7 +14,7 @@ export const AVAILABLE_MODELS: TypedModel[] = [
     description:
       "Large Brain Model - Pretrained transformer for EEG embeddings",
     checkpoint_path:
-      "eeg/models/classification/labram.pth",
+      "eeg/models/classification/pretrained/labram/labram-base.pth",
     window_size: 1600,
     type: "eeg",
   },
@@ -23,7 +23,7 @@ export const AVAILABLE_MODELS: TypedModel[] = [
     name: "EEG Transformer v1",
     description: "Transformer-based EEG classification model",
     checkpoint_path:
-      "eeg/models/classification/labram.pth",
+      "eeg/models/classification/pretrained/labram/labram-base.pth",
     window_size: 1000,
     type: "eeg",
   },
