@@ -1,5 +1,6 @@
 export type EEGDataPoint = {
   time: number;
+  timestampMs: number;
   [key: string]: number;
 };
 

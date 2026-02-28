@@ -275,10 +275,13 @@ const useProvideBCIStream = (): BCIStreamContextValue => {
       for (const sample of samples) {
         if (!sample || sample.length < BASE_COLS + eegCols) continue;
 
-        const point: EEGDataPoint = { time: timeOffsetRef.current };
-        let blinkCandidateChannels = 0;
         const sampleTimestampMs =
           typeof sample[1] === "number" ? (sample[1] as number) : Date.now();
+        const point: EEGDataPoint = {
+          time: timeOffsetRef.current,
+          timestampMs: sampleTimestampMs,
+        };
+        let blinkCandidateChannels = 0;
 
         // Determine where optional columns start
         const rawEnd = BASE_COLS + eegCols;

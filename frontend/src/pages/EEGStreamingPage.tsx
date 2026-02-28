@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import TimeseriesGraph from "@/components/eeg/TimeseriesGraph";
 import { HeadPlot } from "@/components/eeg/HeadPlot3D";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -14,7 +14,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { AlertCircle, Settings2, X } from "lucide-react";
+import { AlertCircle, Download, Settings2, X } from "lucide-react";
 import { useBCIStream } from "@/hooks/useBCIStream";
 import { useEmbeddings } from "@/hooks/useClassificationModelEmbeddings";
 import { useDevice } from "@/contexts/DeviceContext";
@@ -23,9 +23,15 @@ import type { DeviceType } from "@/config/eeg";
 import type { BlinkDetectionSettings } from "@/types/eeg";
 
 type BlinkSettingKey = Exclude<keyof BlinkDetectionSettings, "selectedChannels">;
+type CapturedEEGRow = {
+  timestampMs: number;
+  channelValuesUv: number[];
+};
 
 export default function BCIDashboardPage() {
   const {
+    displayData,
+    sampleCount,
     errorMessage,
     clearError,
     registerStopEmbeddings,
@@ -40,6 +46,11 @@ export default function BCIDashboardPage() {
   const { deviceType, setDeviceType, deviceConfig } = useDevice();
   const [isDismissed, setIsDismissed] = useState(false);
   const [isBlinkDialogOpen, setIsBlinkDialogOpen] = useState(false);
+  const [isCapturing, setIsCapturing] = useState(false);
+  const [capturedSampleCount, setCapturedSampleCount] = useState(0);
+  const [captureNotice, setCaptureNotice] = useState<string | null>(null);
+  const captureRowsRef = useRef<CapturedEEGRow[]>([]);
+  const lastCapturedSampleCountRef = useRef(0);
 
   // Register embedding stop callback
   useEffect(() => {
@@ -74,15 +85,129 @@ export default function BCIDashboardPage() {
   const handleBlinkSettingChange = (key: BlinkSettingKey, rawValue: string) => {
     const parsedValue = Number(rawValue);
     if (!Number.isFinite(parsedValue)) return;
-    updateBlinkSettings({ [key]: parsedValue } as Partial<Omit<BlinkDetectionSettings, "selectedChannels">>);
+    updateBlinkSettings({
+      [key]: parsedValue,
+    } as Partial<Omit<BlinkDetectionSettings, "selectedChannels">>);
   };
+
+  const downloadCaptureCsv = useCallback(
+    (rows: CapturedEEGRow[]) => {
+      if (rows.length === 0) {
+        setCaptureNotice("Capture stopped. No samples were recorded.");
+        return;
+      }
+
+      const header = [
+        "timestamp",
+        ...deviceConfig.channelNames.map((channelName) => `${channelName}_uV`),
+      ];
+      const csvRows = rows.map((row) =>
+        [
+          String(row.timestampMs),
+          ...row.channelValuesUv.map((value) => value.toFixed(6)),
+        ].join(","),
+      );
+      const csvContent = [header.join(","), ...csvRows].join("\n");
+      const blob = new Blob([csvContent], {
+        type: "text/csv;charset=utf-8;",
+      });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      const dateStamp = new Date().toISOString().replace(/[:.]/g, "-");
+      link.href = url;
+      link.download = `eeg_capture_${deviceType}_${dateStamp}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+
+      setCaptureNotice(`Downloaded ${rows.length} samples to CSV.`);
+    },
+    [deviceConfig.channelNames, deviceType],
+  );
+
+  const startCapture = useCallback(() => {
+    if (!isStreaming) return;
+
+    captureRowsRef.current = [];
+    lastCapturedSampleCountRef.current = sampleCount;
+    setCapturedSampleCount(0);
+    setCaptureNotice(null);
+    setIsCapturing(true);
+  }, [isStreaming, sampleCount]);
+
+  const stopCaptureAndDownload = useCallback(() => {
+    if (!isCapturing) return;
+
+    const capturedRows = captureRowsRef.current;
+    setIsCapturing(false);
+    setCapturedSampleCount(capturedRows.length);
+    captureRowsRef.current = [];
+    lastCapturedSampleCountRef.current = sampleCount;
+    downloadCaptureCsv(capturedRows);
+  }, [downloadCaptureCsv, isCapturing, sampleCount]);
+
+  useEffect(() => {
+    if (!isCapturing) return;
+
+    const pendingSampleCount = sampleCount - lastCapturedSampleCountRef.current;
+    if (pendingSampleCount <= 0) return;
+
+    const availableSampleCount = Math.min(pendingSampleCount, displayData.length);
+    if (availableSampleCount <= 0) {
+      lastCapturedSampleCountRef.current = sampleCount;
+      return;
+    }
+
+    const droppedSampleCount = pendingSampleCount - availableSampleCount;
+    const latestPoints = displayData.slice(-availableSampleCount);
+    const capturedRows = latestPoints.map((point) => {
+      const channelValuesUv = deviceConfig.channelNames.map((channelName) => {
+        const filteredValue = point[`fch${channelName}`];
+        if (typeof filteredValue === "number" && Number.isFinite(filteredValue)) {
+          return filteredValue;
+        }
+        const rawValue = point[`ch${channelName}`];
+        return typeof rawValue === "number" && Number.isFinite(rawValue)
+          ? rawValue
+          : 0;
+      });
+
+      return {
+        timestampMs:
+          typeof point.timestampMs === "number" && Number.isFinite(point.timestampMs)
+            ? point.timestampMs
+            : Date.now(),
+        channelValuesUv,
+      };
+    });
+
+    captureRowsRef.current.push(...capturedRows);
+    setCapturedSampleCount((previous) => previous + capturedRows.length);
+    lastCapturedSampleCountRef.current = sampleCount;
+
+    if (droppedSampleCount > 0) {
+      setCaptureNotice(
+        `Dropped ${droppedSampleCount} samples from capture window.`,
+      );
+    }
+  }, [displayData, deviceConfig.channelNames, isCapturing, sampleCount]);
+
+  useEffect(() => {
+    if (isStreaming || !isCapturing) return;
+    stopCaptureAndDownload();
+  }, [isCapturing, isStreaming, stopCaptureAndDownload]);
 
   return (
     <div className="h-full flex flex-col relative">
       {/* Device Selector Bar */}
-      <div className="h-10 border-b border-zinc-200 px-4 flex items-center gap-4 bg-zinc-50/80 shrink-0">
+      <div className="h-12 border-b border-zinc-200 px-4 flex items-center gap-4 bg-zinc-50/80 shrink-0">
         <label className="text-sm font-semibold text-zinc-600">Device:</label>
-        <Select value={deviceType} onValueChange={handleDeviceChange} disabled={isStreaming}>
+        <Select
+          value={deviceType}
+          onValueChange={handleDeviceChange}
+          disabled={isStreaming}
+        >
           <SelectTrigger className="w-[180px] h-8">
             <SelectValue />
           </SelectTrigger>
@@ -100,6 +225,35 @@ export default function BCIDashboardPage() {
           </span>
         )}
         <div className="ml-auto flex items-center gap-3">
+          <span className="text-xs font-semibold text-zinc-500">Capture</span>
+          <span
+            className={`text-xs font-semibold tabular-nums ${
+              isCapturing ? "text-emerald-600" : "text-zinc-500"
+            }`}
+          >
+            {capturedSampleCount} samples
+          </span>
+          <Button
+            variant={isCapturing ? "default" : "outline"}
+            size="sm"
+            onClick={isCapturing ? stopCaptureAndDownload : startCapture}
+            disabled={!isCapturing && !isStreaming}
+            className="h-8 cursor-pointer"
+            title={
+              !isStreaming && !isCapturing
+                ? "Start EEG streaming before capture"
+                : undefined
+            }
+          >
+            <Download className="h-3.5 w-3.5" />
+            {isCapturing ? "Stop & Download" : "Capture CSV"}
+          </Button>
+          {captureNotice && (
+            <span className="text-xs text-zinc-500 max-w-72 truncate" title={captureNotice}>
+              {captureNotice}
+            </span>
+          )}
+          <div className="h-5 w-px bg-zinc-200" />
           <span className="text-xs font-semibold text-zinc-500">Blinks</span>
           <span
             className={`h-2.5 w-2.5 rounded-full transition-all duration-150 ${
@@ -108,7 +262,9 @@ export default function BCIDashboardPage() {
                 : "bg-zinc-300"
             }`}
           />
-          <span className="text-xs text-zinc-500 tabular-nums">{blink.blinkCount}</span>
+          <span className="text-xs text-zinc-500 tabular-nums">
+            {blink.blinkCount}
+          </span>
           <Button
             variant="outline"
             size="sm"
@@ -211,7 +367,10 @@ export default function BCIDashboardPage() {
                       step={1}
                       value={blinkSettings.requiredChannels}
                       onChange={(event) =>
-                        handleBlinkSettingChange("requiredChannels", event.target.value)
+                        handleBlinkSettingChange(
+                          "requiredChannels",
+                          event.target.value,
+                        )
                       }
                     />
                   </div>
@@ -224,7 +383,10 @@ export default function BCIDashboardPage() {
                       step={0.1}
                       value={blinkSettings.zScoreThreshold}
                       onChange={(event) =>
-                        handleBlinkSettingChange("zScoreThreshold", event.target.value)
+                        handleBlinkSettingChange(
+                          "zScoreThreshold",
+                          event.target.value,
+                        )
                       }
                     />
                   </div>
@@ -237,7 +399,10 @@ export default function BCIDashboardPage() {
                       step={1}
                       value={blinkSettings.minAmplitudeUv}
                       onChange={(event) =>
-                        handleBlinkSettingChange("minAmplitudeUv", event.target.value)
+                        handleBlinkSettingChange(
+                          "minAmplitudeUv",
+                          event.target.value,
+                        )
                       }
                     />
                   </div>
@@ -250,7 +415,10 @@ export default function BCIDashboardPage() {
                       step={0.1}
                       value={blinkSettings.minDeviationUv}
                       onChange={(event) =>
-                        handleBlinkSettingChange("minDeviationUv", event.target.value)
+                        handleBlinkSettingChange(
+                          "minDeviationUv",
+                          event.target.value,
+                        )
                       }
                     />
                   </div>
@@ -271,7 +439,10 @@ export default function BCIDashboardPage() {
                       step={1}
                       value={blinkSettings.warmupSamples}
                       onChange={(event) =>
-                        handleBlinkSettingChange("warmupSamples", event.target.value)
+                        handleBlinkSettingChange(
+                          "warmupSamples",
+                          event.target.value,
+                        )
                       }
                     />
                   </div>
@@ -284,7 +455,10 @@ export default function BCIDashboardPage() {
                       step={0.001}
                       value={blinkSettings.baselineAlpha}
                       onChange={(event) =>
-                        handleBlinkSettingChange("baselineAlpha", event.target.value)
+                        handleBlinkSettingChange(
+                          "baselineAlpha",
+                          event.target.value,
+                        )
                       }
                     />
                   </div>
@@ -297,7 +471,10 @@ export default function BCIDashboardPage() {
                       step={10}
                       value={blinkSettings.cooldownMs}
                       onChange={(event) =>
-                        handleBlinkSettingChange("cooldownMs", event.target.value)
+                        handleBlinkSettingChange(
+                          "cooldownMs",
+                          event.target.value,
+                        )
                       }
                     />
                   </div>
@@ -310,7 +487,10 @@ export default function BCIDashboardPage() {
                       step={10}
                       value={blinkSettings.flashMs}
                       onChange={(event) =>
-                        handleBlinkSettingChange("flashMs", event.target.value)
+                        handleBlinkSettingChange(
+                          "flashMs",
+                          event.target.value,
+                        )
                       }
                     />
                   </div>
@@ -325,7 +505,10 @@ export default function BCIDashboardPage() {
                 >
                   Reset Defaults
                 </Button>
-                <Button onClick={() => setIsBlinkDialogOpen(false)} className="cursor-pointer">
+                <Button
+                  onClick={() => setIsBlinkDialogOpen(false)}
+                  className="cursor-pointer"
+                >
                   Close
                 </Button>
               </div>
