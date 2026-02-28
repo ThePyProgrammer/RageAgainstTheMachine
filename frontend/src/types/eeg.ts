@@ -5,6 +5,24 @@ export type EEGDataPoint = {
 
 export type StreamStatus = "disconnected" | "connected";
 
+export type BlinkDetectionState = {
+  detected: boolean;
+  lastDetectedAtMs: number | null;
+  blinkCount: number;
+};
+
+export type BlinkDetectionSettings = {
+  selectedChannels: string[];
+  requiredChannels: number;
+  warmupSamples: number;
+  baselineAlpha: number;
+  zScoreThreshold: number;
+  minAmplitudeUv: number;
+  minDeviationUv: number;
+  cooldownMs: number;
+  flashMs: number;
+};
+
 export type ChannelRange = {
   min: number;
   max: number;
