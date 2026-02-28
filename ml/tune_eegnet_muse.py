@@ -186,6 +186,33 @@ def _split_train_val(
     return X[train_idx], y[train_idx], X[val_idx], y[val_idx]
 
 
+def _split_train_val_stratified(
+    X: np.ndarray, y: np.ndarray, val_split: float, seed: int
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    if len(X) < 2:
+        raise ValueError("Need at least 2 epochs for train/val split.")
+
+    rng = np.random.default_rng(seed)
+    class_labels = np.unique(y)
+    train_indices = []
+    val_indices = []
+
+    for cls in class_labels:
+        cls_idx = np.where(y == cls)[0]
+        cls_idx = rng.permutation(cls_idx)
+        n_val_cls = max(1, int(round(len(cls_idx) * val_split)))
+        if len(cls_idx) > 1:
+            n_val_cls = min(n_val_cls, len(cls_idx) - 1)
+        val_indices.append(cls_idx[:n_val_cls])
+        train_indices.append(cls_idx[n_val_cls:])
+
+    train_idx = np.concatenate(train_indices)
+    val_idx = np.concatenate(val_indices)
+    train_idx = rng.permutation(train_idx)
+    val_idx = rng.permutation(val_idx)
+    return X[train_idx], y[train_idx], X[val_idx], y[val_idx]
+
+
 def _make_classifier(
     checkpoint_path: Path,
     device: str,
@@ -263,6 +290,12 @@ def main() -> None:
     parser.add_argument("--weight-decay", type=float, default=1e-4)
     parser.add_argument("--val-split", type=float, default=0.2)
     parser.add_argument(
+        "--stratified-split",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Use class-stratified train/val splitting when validation is enabled.",
+    )
+    parser.add_argument(
         "--use-all-data",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -289,6 +322,12 @@ def main() -> None:
     parser.add_argument("--dropout", type=float, default=0.5)
     parser.add_argument("--kernel-length", type=int, default=64)
     parser.add_argument("--use-attention", action="store_true")
+    parser.add_argument(
+        "--class-weighted-loss",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Use inverse-frequency class weights in cross-entropy loss.",
+    )
     parser.add_argument(
         "--freeze-early",
         action="store_true",
@@ -355,10 +394,17 @@ def main() -> None:
         y_val = np.empty((0,), dtype=y.dtype)
         print("Training mode: using all data (no validation split).")
     else:
-        X_train, y_train, X_val, y_val = _split_train_val(
-            X, y, val_split=args.val_split, seed=args.seed
-        )
-        print(f"Training mode: train/val split with val_split={args.val_split:.2f}")
+        if args.stratified_split:
+            X_train, y_train, X_val, y_val = _split_train_val_stratified(
+                X, y, val_split=args.val_split, seed=args.seed
+            )
+            split_mode = "stratified train/val split"
+        else:
+            X_train, y_train, X_val, y_val = _split_train_val(
+                X, y, val_split=args.val_split, seed=args.seed
+            )
+            split_mode = "random train/val split"
+        print(f"Training mode: {split_mode} with val_split={args.val_split:.2f}")
 
     print(
         f"Dataset: total={len(X)} train={len(X_train)} val={len(X_val)} "
@@ -382,7 +428,19 @@ def main() -> None:
     else:
         val_loader = None
 
-    criterion = nn.CrossEntropyLoss()
+    if args.class_weighted_loss:
+        n_classes = int(classifier.model.n_classes)
+        class_counts = np.bincount(y_train, minlength=n_classes).astype(np.float32)
+        class_weights = (class_counts.sum() / np.maximum(class_counts, 1.0)) / float(
+            n_classes
+        )
+        criterion = nn.CrossEntropyLoss(
+            weight=torch.tensor(class_weights, dtype=torch.float32, device=device)
+        )
+        print(f"Loss mode: class-weighted CE, weights={class_weights.tolist()}")
+    else:
+        criterion = nn.CrossEntropyLoss()
+        print("Loss mode: standard CE")
     trainable_params = [p for p in classifier.model.parameters() if p.requires_grad]
     optimizer = optim.Adam(
         trainable_params, lr=args.learning_rate, weight_decay=args.weight_decay
