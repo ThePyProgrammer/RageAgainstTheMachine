@@ -35,7 +35,7 @@ export const TauntBubble = ({
 
   return (
     <div
-      className="fixed top-16 left-1/2 -translate-x-1/2 z-20 border-2 border-cyan-400 bg-black/85 px-5 py-3 rounded-lg text-white shadow-[0_0_30px] font-bold text-lg"
+      className="pointer-events-none fixed top-16 right-4 z-20 w-[min(26rem,calc(100vw-2rem))] border-2 border-cyan-400 bg-black/80 px-4 py-3 rounded-lg text-white shadow-[0_0_30px] font-semibold text-base leading-snug"
       style={{ opacity }}
     >
       {text}

@@ -3,9 +3,8 @@
  *
  * Run with:  npx tsx frontend/src/combat3d/engine/__tests__/engine.test.ts
  *
- * Uses Node built-in assert — no test framework required.
+ * Uses lightweight in-file assertions — no test framework required.
  */
-import assert from "assert/strict";
 import { SeededRNG } from "../seededRng";
 import { advanceSimulation, createInitialState } from "../physics";
 import {
@@ -15,6 +14,24 @@ import {
   FRAME_MS,
 } from "../index";
 import type { InputSample, CombatState } from "../types";
+
+const assert = {
+  equal<T>(actual: T, expected: T, message?: string): void {
+    if (actual !== expected) {
+      throw new Error(message ?? `Expected ${String(expected)}, got ${String(actual)}`);
+    }
+  },
+  notEqual<T>(actual: T, expected: T, message?: string): void {
+    if (actual === expected) {
+      throw new Error(message ?? `Expected value to differ from ${String(expected)}`);
+    }
+  },
+  ok(value: unknown, message?: string): void {
+    if (!value) {
+      throw new Error(message ?? "Expected truthy value");
+    }
+  },
+};
 
 /* ── helpers ─────────────────────────────────────────────────────────── */
 
@@ -113,12 +130,15 @@ const config = createCombatConfig(0x2f2f);
   let state: CombatState = {
     tick: 0,
     simTimeMs: 0,
-    player: { x: 0, y: 0, yaw: 0, vx: 0, vy: 0, cooldownMs: 0, speedBoostMs: 0 },
+    player: { x: 0, y: 0, yaw: 0, vx: 0, vy: 0, cooldownMs: 0, speedBoostMs: 0, hp: 5, maxHp: 5, ammo: 15, maxAmmo: 15, reloadMs: 0, cumulativeYaw: 0 },
     // Enemy directly ahead of player (yaw 0 = +X direction)
-    enemy: { x: 3, y: 0, yaw: Math.PI, vx: 0, vy: 0, cooldownMs: 0, speedBoostMs: 0 },
+    enemy: { x: 3, y: 0, yaw: Math.PI, vx: 0, vy: 0, cooldownMs: 0, speedBoostMs: 0, hp: 5, maxHp: 5, ammo: 999, maxAmmo: 999, reloadMs: 0, cumulativeYaw: 0 },
     projectiles: [],
     score: { player: 0, enemy: 0 },
     difficulty: { stress: 0.5, aggression: 0.4, reactionMs: 220 },
+    lastObstacleSpawnMs: 0,
+    nextDynamicObstacleId: 1000,
+    dynamicObstacles: [],
   };
 
   // Fire from player toward enemy
@@ -129,13 +149,13 @@ const config = createCombatConfig(0x2f2f);
   let hit = false;
   for (let i = 0; i < 120; i++) {
     state = advanceSimulation(state, idle(state.simTimeMs), idle(state.simTimeMs), config, dt).state;
-    if (state.score.player > 0) {
+    if (state.enemy.hp < 5) {
       hit = true;
       break;
     }
   }
-  assert.ok(hit, "Player score must increment when projectile hits enemy");
-  console.log("✓ Scoring: projectile hit increments player score");
+  assert.ok(hit, "Enemy HP must decrease when projectile hits");
+  console.log("✓ Scoring: projectile hit reduces enemy HP");
 }
 
 /* ── 6. Key state maps to correct controls ────────────────────────── */

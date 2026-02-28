@@ -21,7 +21,7 @@ export interface DeterministicStepResult {
 
 export const createStateFromSeed = (seed: number): CombatState => {
   const rng = new SeededRNG(seed);
-  const state = {
+  const state: CombatState = {
     tick: 0,
     simTimeMs: 0,
     player: {
@@ -32,6 +32,12 @@ export const createStateFromSeed = (seed: number): CombatState => {
       vy: 0,
       cooldownMs: 0,
       speedBoostMs: 0,
+      hp: 5,
+      maxHp: 5,
+      ammo: 15,
+      maxAmmo: 15,
+      reloadMs: 0,
+      cumulativeYaw: 0,
     },
     enemy: {
       x: 20,
@@ -41,6 +47,12 @@ export const createStateFromSeed = (seed: number): CombatState => {
       vy: 0,
       cooldownMs: 0,
       speedBoostMs: 0,
+      hp: 5,
+      maxHp: 5,
+      ammo: 999,
+      maxAmmo: 999,
+      reloadMs: 0,
+      cumulativeYaw: 0,
     },
     projectiles: [],
     score: {
@@ -52,6 +64,9 @@ export const createStateFromSeed = (seed: number): CombatState => {
       aggression: rng.nextFloat() * 0.4,
       reactionMs: 220,
     },
+    lastObstacleSpawnMs: 0,
+    nextDynamicObstacleId: 1000,
+    dynamicObstacles: [],
   };
 
   return state;

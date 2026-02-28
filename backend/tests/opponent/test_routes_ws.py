@@ -14,8 +14,12 @@ def _build_app() -> FastAPI:
     return app
 
 
-def _valid_event_payload(event_id: str = "evt-1") -> dict:
-    return {
+def _valid_event_payload(
+    event_id: str = "evt-1",
+    *,
+    input_mode: str | None = None,
+) -> dict:
+    payload = {
         "type": "game_event",
         "event_id": event_id,
         "game_mode": "pong",
@@ -25,6 +29,9 @@ def _valid_event_payload(event_id: str = "evt-1") -> dict:
         "event_context": {"near_side": "ai_goal", "proximity": 0.2},
         "timestamp_ms": 1730000000000,
     }
+    if input_mode:
+        payload["input_mode"] = input_mode
+    return payload
 
 
 def test_opponent_websocket_happy_path(monkeypatch) -> None:
@@ -201,16 +208,31 @@ def test_taunt_is_qualitative_not_numeric(monkeypatch) -> None:
         assert "%" not in taunt
 
 
+def test_non_eeg_input_uses_synthetic_metrics(monkeypatch) -> None:
+    def _raise_if_called():
+        raise RuntimeError("streamer should not be called for synthetic metrics")
+
+    monkeypatch.setattr(opponent_routes, "get_active_streamer", _raise_if_called)
+    monkeypatch.setattr(opponent_routes.openai_service, "is_available", lambda: False)
+
+    app = _build_app()
+    with TestClient(app).websocket_connect("/opponent/ws") as ws:
+        ws.send_json(_valid_event_payload(event_id="evt-synth", input_mode="keyboard_paddle"))
+        response = ws.receive_json()
+        assert response["type"] == "opponent_update"
+        assert response["meta"]["metrics_age_ms"] == 0
+        assert 0 <= response["metrics"]["stress"] <= 1
+        assert 0 <= response["metrics"]["frustration"] <= 1
+        assert 0 <= response["metrics"]["focus"] <= 1
+        assert 0 <= response["metrics"]["alertness"] <= 1
+
+
 def test_taunt_trim_avoids_mid_word_cut() -> None:
     taunt = (
         "Snapped that bounce clean and stole your tempo.. "
         "You're awake, but I'm still faster."
     )
-    trimmed = opponent_routes._ensure_metric_reference(
-        taunt,
-        metrics=opponent_routes.DEFAULT_METRICS,
-        max_chars=70,
-    )
+    trimmed = opponent_routes._clean_taunt_text(taunt, max_chars=70)
     assert len(trimmed) <= 70
     assert ".." not in trimmed
     assert not trimmed.endswith("bu")

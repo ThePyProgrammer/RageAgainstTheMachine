@@ -48,6 +48,49 @@ def test_near_player_goal_event_boost() -> None:
 
 
 def test_smoothing_limits_per_event_jump() -> None:
-    final_value = apply_difficulty_control(previous=0.40, prior=0.90, model_target=1.0)
-    assert abs(final_value - 0.40) <= 0.080001
+    final_value = apply_difficulty_control(
+        previous=0.40,
+        prior=0.90,
+        model_target=1.0,
+        event=GameEventType.AI_SCORE,
+        score=ScorePayload(player=1, ai=4),
+        event_context=None,
+    )
+    assert abs(final_value - 0.40) <= 0.050001
 
+
+def test_upward_cap_expands_with_evidence() -> None:
+    final_value = apply_difficulty_control(
+        previous=0.40,
+        prior=0.90,
+        model_target=1.0,
+        event=GameEventType.PLAYER_SCORE,
+        score=ScorePayload(player=4, ai=2),
+        event_context=None,
+    )
+    assert abs(final_value - 0.40) <= 0.080001
+    assert final_value >= 0.48
+
+
+def test_downward_cap_allows_faster_relief() -> None:
+    final_value = apply_difficulty_control(
+        previous=0.70,
+        prior=0.20,
+        model_target=0.0,
+        event=GameEventType.PLAYER_SCORE,
+        score=ScorePayload(player=5, ai=4),
+        event_context=EventContextPayload(near_side=NearSide.AI_GOAL, proximity=0.3),
+    )
+    assert abs(final_value - 0.70) <= 0.100001
+
+
+def test_big_ai_lead_forces_difficulty_down() -> None:
+    final_value = apply_difficulty_control(
+        previous=0.72,
+        prior=0.86,
+        model_target=0.92,
+        event=GameEventType.AI_SCORE,
+        score=ScorePayload(player=1, ai=6),
+        event_context=None,
+    )
+    assert final_value < 0.72

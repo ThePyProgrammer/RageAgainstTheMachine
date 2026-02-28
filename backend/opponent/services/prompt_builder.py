@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from opponent.models import OpponentGameEvent
+from opponent.models import GameEventType, NearSide, OpponentGameEvent
 from opponent.services.difficulty_service import MetricsSnapshot
 
 
@@ -81,7 +81,7 @@ def build_system_prompt(max_taunt_chars: int) -> str:
         "\n"
         "Rules:\n"
         f"- Under {max_taunt_chars} characters. Speakable in ~2 seconds.\n"
-        "- No slurs, profanity, or cruelty.\n"
+        "- No harassment, slurs, profanity, or cruelty.\n"
         "- Match the event honestly: gloat when you score, give backhanded "
         "credit when they score, emphasize tension on near misses.\n"
         "- Reference biometrics naturally (nerves, heartrate, shaking, "
@@ -90,6 +90,8 @@ def build_system_prompt(max_taunt_chars: int) -> str:
         "mechanics like curveballs or powerups.\n"
         "- Vary your angle each time: smug, self-deprecating, creepily "
         "observant, playfully threatening.\n"
+        "- Default to gradual pressure increases. Only push difficulty quickly "
+        "when clear gameplay evidence shows they can handle it.\n"
         "\n"
         'Return JSON: {"taunt_text": "...", "difficulty_target": 0.0-1.0}\n'
         "Set difficulty_target higher when stress/frustration are high.\n"
@@ -145,9 +147,14 @@ def build_user_prompt(
         state_parts.append("holding steady")
     mental_state = ", ".join(state_parts)
 
+    escalation_evidence = _has_escalation_evidence(event)
+
     return (
+        f"Event type: {event_name}\n"
         f"Event: {what_happened}\n"
         f"Score: {score_feel}\n"
+        f"Prior suggested difficulty: {prior_difficulty:.3f}\n"
+        f"Escalation evidence: {'strong' if escalation_evidence else 'weak'}\n"
         f"Their state: {mental_state}\n"
         f"Standout signal: {dominant_metric} is {dominant_state}\n"
         "Return JSON only."
@@ -192,3 +199,13 @@ def _describe_score(player: int, ai: int) -> str:
         return f"{s} — pulling away" if player - ai >= 3 else s
     s = f"You lead {ai}-{player}"
     return f"{s} — dominant" if ai - player >= 3 else s
+
+
+def _has_escalation_evidence(event: OpponentGameEvent) -> bool:
+    if event.event == GameEventType.PLAYER_SCORE:
+        return True
+    if event.score.player >= event.score.ai:
+        return True
+    if not event.event_context or not event.event_context.near_side:
+        return False
+    return event.event == GameEventType.NEAR_SCORE and event.event_context.near_side == NearSide.AI_GOAL

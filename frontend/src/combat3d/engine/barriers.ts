@@ -1,3 +1,5 @@
+import type { Projectile } from "./types";
+
 /**
  * Barrier / obstacle collision and destruction system.
  *
@@ -93,12 +95,12 @@ const BULLET_HIT_RADIUS_SQ = 1.5 * 1.5; // projectile-vs-barrier hit threshold²
  * Returns the subset of projectiles that survived (did not hit any barrier).
  */
 export const resolveProjectileBarrierHits = (
-  projectiles: ReadonlyArray<{ x: number; y: number; vx: number; vy: number; ttlMs: number; owner: string }>,
+  projectiles: ReadonlyArray<Projectile>,
   barriers: Barrier[],
   simTimeMs: number,
   breakEvents: BarrierBreakEvent[],
-): typeof projectiles extends ReadonlyArray<infer T> ? T[] : never => {
-  const surviving: any[] = [];
+): Projectile[] => {
+  const surviving: Projectile[] = [];
 
   for (const p of projectiles) {
     let absorbed = false;
