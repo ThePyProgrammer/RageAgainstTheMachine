@@ -67,7 +67,7 @@ labels:
     2: "rest"
 
 model:
-  checkpoint_path: "../backend/eeg/models/classification/pretrained/labram/labram-base.pth"
+  checkpoint_path: "labram/labram-base.pth"
   num_classes: 3
   freeze_encoder: true
   pooling: "mean"
@@ -79,5 +79,5 @@ training:
   learning_rate: 0.001
   num_epochs: 200
   early_stopping_patience: 40
-  savedir: _archive/mi/models/labram_probe
+  savedir: models/labram_probe
   savename: labram_probe_best.pth
