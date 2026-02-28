@@ -1,234 +1,99 @@
 # AI_OPPONENT_DIFFICULTY.md
 
-Adaptive AI difficulty based on player stress level.
+Adaptive AI opponent difficulty derived from game state + backend command-centre metrics.
 
-Location: `/packages/game/src/ai.ts` (shared) + `/apps/server/src/game/aiManager.ts`
+## Implementation Location
 
-## Difficulty Levels
+- Backend route: `/backend/opponent/routes.py`
+- Difficulty logic: `/backend/opponent/services/difficulty_service.py`
+- Websocket endpoint: `/opponent/ws`
 
-Defined in `/packages/game/src/ai.ts`:
+## Inputs
 
-```typescript
-export interface AIDifficulty {
-  reactionDelay: number; // seconds (simulated input lag)
-  errorMargin: number; // pixels (random target offset)
-  maxSpeed: number; // fraction of PADDLE_MAX_SPEED (0.0 - 1.0)
-  predictionDepth: number; // frames ahead to predict ball
-}
+- Frontend event payload (`game_event`):
+  - `event`: `player_score | ai_score | near_score`
+  - `score.player`, `score.ai`
+  - `current_difficulty` in `[0, 1]`
+  - optional near-score context
+- Backend metrics snapshot:
+  - `stress`, `frustration`, `focus`, `alertness` in `[0, 1]`
 
-export const DIFFICULTY_PRESETS = {
-  EASY: {
-    reactionDelay: 0.3,
-    errorMargin: 60,
-    maxSpeed: 0.6,
-    predictionDepth: 5,
+## Stress-Dominant Prior
+
+The deterministic prior is computed as:
+
+```text
+lead = clamp(-1, 1, (player_score - ai_score) / 10)
+prior = clamp01(
+  0.55
+  + 0.35 * stress
+  + 0.10 * frustration
+  + 0.08 * max(lead, 0)
+  - 0.04 * max(-lead, 0)
+  + event_boost
+)
+```
+
+Event boost:
+- `near_score` near player goal: `+0.03`
+- `ai_score`: `+0.01`
+- `player_score`: `-0.01`
+- otherwise: `0`
+
+## Model Target and Control Layer
+
+The model proposes `difficulty_target` in `[0, 1]`.
+Backend applies bounded control:
+
+```text
+model_clamped = clamp(prior - 0.20, prior + 0.20, model_target)
+target = 0.70 * model_clamped + 0.30 * prior
+final = previous + clamp(target - previous, -0.08, +0.08)
+final = clamp01(final)
+```
+
+This prevents sharp jumps and keeps difficulty smooth.
+
+## Fallback Behavior
+
+- If model output fails: use rule-based taunt and set `model_target = prior`.
+- If speech synthesis fails: return text + difficulty with empty audio payload.
+- If command-centre metrics are unavailable: use neutral fallback metrics and emit recoverable error.
+
+## Output Contract
+
+Server sends `opponent_update`:
+
+```json
+{
+  "type": "opponent_update",
+  "event_id": "evt-1",
+  "taunt_text": "You're sweating already.",
+  "difficulty": {
+    "previous": 0.62,
+    "model_target": 0.82,
+    "final": 0.70
   },
-  MEDIUM: {
-    reactionDelay: 0.15,
-    errorMargin: 30,
-    maxSpeed: 0.8,
-    predictionDepth: 10,
+  "speech": {
+    "mime_type": "audio/mpeg",
+    "audio_base64": "..."
   },
-  HARD: {
-    reactionDelay: 0.05,
-    errorMargin: 10,
-    maxSpeed: 1.0,
-    predictionDepth: 20,
+  "metrics": {
+    "stress": 0.64,
+    "frustration": 0.58,
+    "focus": 0.42,
+    "alertness": 0.73
   },
-  IMPOSSIBLE: {
-    reactionDelay: 0.0,
-    errorMargin: 0,
-    maxSpeed: 1.0,
-    predictionDepth: 60,
+  "meta": {
+    "provider": "responses_speech",
+    "latency_ms": 420,
+    "metrics_age_ms": 105
   },
-} as const;
-```
-
-## Stress-Based Adaptation
-
-File: `/apps/server/src/game/aiManager.ts`
-
-```typescript
-import { AIDifficulty, DIFFICULTY_PRESETS, adaptDifficulty } from '@packages/game';
-
-export class AIManager {
-  private baselineDifficulty: AIDifficulty = DIFFICULTY_PRESETS.MEDIUM;
-  private currentDifficulty: AIDifficulty = DIFFICULTY_PRESETS.MEDIUM;
-
-  /**
-   * Update difficulty based on stress
-   * Called every second or when stress changes significantly
-   */
-  updateDifficulty(stressLevel: number): void {
-    this.currentDifficulty = adaptDifficulty(this.baselineDifficulty, stressLevel);
-  }
-
-  /**
-   * Get current difficulty
-   */
-  getDifficulty(): AIDifficulty {
-    return this.currentDifficulty;
-  }
-
-  /**
-   * Set baseline difficulty (user choice or adaptive baseline)
-   */
-  setBaseline(difficulty: AIDifficulty): void {
-    this.baselineDifficulty = difficulty;
-  }
+  "timestamp_ms": 1730000000500
 }
 ```
 
-## Adaptation Function
+## Validation and Tests
 
-Defined in `/packages/game/src/ai.ts`:
-
-```typescript
-/**
- * Adapt difficulty based on stress level
- * High stress (1.0) → easier AI
- * Low stress (0.0) → harder AI
- */
-export function adaptDifficulty(
-  baseline: AIDifficulty,
-  stressLevel: number // 0.0 - 1.0
-): AIDifficulty {
-  // Invert stress: 0.0 = stressed, 1.0 = calm
-  const calmFactor = 1 - stressLevel;
-
-  return {
-    // Slower reaction when stressed
-    reactionDelay: baseline.reactionDelay * (1 + stressLevel * 0.8),
-
-    // More errors when stressed
-    errorMargin: baseline.errorMargin * (1 + stressLevel * 1.5),
-
-    // Slower paddle when stressed (50% - 100% of baseline)
-    maxSpeed: baseline.maxSpeed * (0.5 + calmFactor * 0.5),
-
-    // Shallower prediction when stressed
-    predictionDepth: Math.floor(baseline.predictionDepth * (0.5 + calmFactor * 0.5)),
-  };
-}
-```
-
-## Adaptation Curve
-
-| Stress Level | AI Behavior |
-|--------------|-------------|
-| 0.0 (Calm) | Baseline difficulty (no change) |
-| 0.3 | Slightly slower, 20% more errors |
-| 0.5 | Noticeably easier, 50% more errors |
-| 0.7 | Significantly easier, 75% slower |
-| 1.0 (Stressed) | Very easy, 50% speed, 150% more errors |
-
-## Smoothing
-
-Apply exponential moving average to prevent jarring difficulty changes:
-
-```typescript
-export class AIManager {
-  private targetDifficulty: AIDifficulty = DIFFICULTY_PRESETS.MEDIUM;
-  private currentDifficulty: AIDifficulty = DIFFICULTY_PRESETS.MEDIUM;
-
-  updateDifficulty(stressLevel: number): void {
-    this.targetDifficulty = adaptDifficulty(this.baselineDifficulty, stressLevel);
-
-    // Smooth transition (alpha = 0.1)
-    this.currentDifficulty = {
-      reactionDelay: lerp(this.currentDifficulty.reactionDelay, this.targetDifficulty.reactionDelay, 0.1),
-      errorMargin: lerp(this.currentDifficulty.errorMargin, this.targetDifficulty.errorMargin, 0.1),
-      maxSpeed: lerp(this.currentDifficulty.maxSpeed, this.targetDifficulty.maxSpeed, 0.1),
-      predictionDepth: Math.floor(lerp(this.currentDifficulty.predictionDepth, this.targetDifficulty.predictionDepth, 0.1)),
-    };
-  }
-}
-
-function lerp(a: number, b: number, t: number): number {
-  return a + (b - a) * t;
-}
-```
-
-## AI Command Generation
-
-File: `/apps/server/src/game/gameLoop.ts`
-
-```typescript
-import { calculateAICommand } from '@packages/game';
-import { AIManager } from './aiManager';
-
-export class ServerGameLoop {
-  private aiManager = new AIManager();
-  private aiReactionBuffer: Array<{ command: PaddleCommand; timestamp: number }> = [];
-
-  tick(gameState: GameState, stressLevel: number): GameState {
-    // Update AI difficulty based on stress
-    this.aiManager.updateDifficulty(stressLevel);
-    const difficulty = this.aiManager.getDifficulty();
-
-    // Calculate AI command (with prediction)
-    const rawCommand = calculateAICommand(
-      gameState.aiPaddle,
-      gameState.ball,
-      difficulty,
-      GAME_CONSTANTS.DT
-    );
-
-    // Apply reaction delay
-    this.aiReactionBuffer.push({ command: rawCommand, timestamp: Date.now() });
-    const delayMs = difficulty.reactionDelay * 1000;
-    const delayedCommand = this.aiReactionBuffer.find(
-      (entry) => Date.now() - entry.timestamp >= delayMs
-    )?.command ?? 'NEUTRAL';
-
-    // Tick game engine
-    const playerCommand = /* from input pipeline */;
-    return tick(gameState, playerCommand, delayedCommand);
-  }
-}
-```
-
-## User Control (Optional)
-
-Allow user to set baseline difficulty:
-
-```typescript
-// Client UI
-<select onChange={(e) => setBaseline(e.target.value)}>
-  <option value="EASY">Easy</option>
-  <option value="MEDIUM">Medium</option>
-  <option value="HARD">Hard</option>
-  <option value="ADAPTIVE">Adaptive (stress-based)</option>
-</select>
-
-// Server
-socket.on('set_difficulty', (level: keyof typeof DIFFICULTY_PRESETS) => {
-  aiManager.setBaseline(DIFFICULTY_PRESETS[level]);
-});
-```
-
-## Edge Cases
-
-| Case | Handling |
-|------|----------|
-| Stress data missing | Use baseline difficulty (no adaptation) |
-| Stress spikes rapidly | Smoothing prevents jarring changes |
-| User too calm | Difficulty increases smoothly to baseline |
-| User too stressed | Difficulty floors at 50% speed minimum |
-
-## Testing
-
-### Unit Tests
-- [ ] `adaptDifficulty` clamps to valid ranges
-- [ ] Smoothing converges to target over time
-- [ ] Reaction delay buffer works correctly
-
-### Integration Tests
-- [ ] AI gets easier when stress = 1.0
-- [ ] AI returns to baseline when stress = 0.0
-- [ ] Smooth transitions over 5-10 seconds
-
-### Playtesting
-- [ ] Adaptive difficulty feels natural
-- [ ] No "rubber-banding" perception
-- [ ] AI remains beatable at all stress levels
+- Unit tests: prior formula, stress dominance, smoothing bounds.
+- Websocket tests: valid event flow, invalid payload handling, fallback on model failure, rate limiting behavior.

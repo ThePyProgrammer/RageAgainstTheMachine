@@ -1,81 +1,82 @@
-  # AGENTS.md
+# AGENTS.md
 
-  ## Project: Rage Against The Machine
+## Project: Rage Against The Machine
 
-  A live brain-computer interface Pong game where a human controls a paddle using Muse/OpenBCI EEG via an existing Thonk signal
-  bridge. The AI opponent adapts difficulty based on inferred stress and generates ragebaiting trash-talk speech bubbles via GPT
-  during key game events.
+A live brain-computer interface game platform where a human plays against an adaptive AI opponent.
+The frontend renders game/UI, while the backend handles EEG streaming, cognitive signal derivation,
+and AI opponent personality responses (taunt text + speech + difficulty updates).
 
-  ## Core Technology Stack
+## Core Technology Stack
 
-  - **Language**: TypeScript everywhere
-  - **Frontend**: React + Vite + Tailwind CSS
-  - **Backend**: Node.js + TypeScript + Socket.IO
-  - **Game Rendering**: Canvas + requestAnimationFrame (no React re-render per frame)
-  - **Realtime Transport**: Socket.IO
-  - **AI Taunts**: OpenAI API (abstracted behind provider interface)
+- Language: TypeScript (frontend), Python (backend)
+- Frontend: React + Vite + Tailwind CSS
+- Backend: FastAPI + WebSockets
+- EEG Streaming: BrainFlow + Muse LSL adapters
+- AI Opponent: OpenAI Responses API + OpenAI Audio Speech API (server-side only)
 
-  ## Monorepo Structure
+## Repository Structure
 
-  /apps/web              # React + Vite frontend
-  /apps/server           # Node.js + TypeScript backend
-  /packages/shared       # Shared types, Zod schemas, event contracts
-  /packages/thonk        # Placeholder Thonk adapter (no real hardware)
-  /packages/game         # Pure TS game engine (deterministic physics)
+- `/frontend` - React app, visualizations, and game pages/hooks
+- `/backend` - FastAPI services, EEG pipelines, websocket APIs, opponent logic
+- `/docs` - technical notes and background references
 
-  ## Dev Guardrails (Enforceable Rules)
+## Dev Guardrails
 
-  ### Code Quality
-  - All modules must export TypeScript types/interfaces
-  - No `any` types except in explicit adapter boundaries
-  - All WebSocket events must have Zod schemas in `/packages/shared`
-  - All game physics must be deterministic and testable without canvas
+### Code Quality
+- Keep backend request/websocket payloads validated with Pydantic models.
+- Avoid `any` in frontend except explicit integration boundaries.
+- Keep opponent output contract stable and structured.
+- Keep all difficulty math deterministic and testable.
 
-  ### Performance
-  - Game loop must run at stable 60 FPS (16.67ms budget)
-  - Input pipeline latency: thonk signal → rendered paddle movement < 50ms (p95)
-  - WebSocket message latency < 20ms (p95)
-  - Canvas rendering operations must not block event loop
+### Real-time and Performance
+- Avoid blocking work in websocket handlers.
+- Opponent processing should keep event-to-response latency low (<1s target in local demo).
+- Keep EEG-derived command-centre metrics backend-authoritative.
+- Use rate limiting for taunt/speech generation to avoid event spam.
 
-  ### State Management
-  - Game state lives in refs, NOT React state
-  - React renders only for UI chrome (scores, menus, overlays)
-  - No prop drilling; use Context only for session/calibration state
-  - Server maintains single source of truth for game state
+### Security
+- No API keys in frontend.
+- `OPENAI_API_KEY` must remain backend-only.
+- Validate all client->server websocket payloads.
+- No persistent PII storage for player identity in hackathon mode.
 
-  ### Calibration
-  - Calibration must converge in ≤3 trials per direction
-  - Must produce quality score; reject if separation < 1.0σ
-  - Store calibration per user session ID
-  - Graceful fallback to keyboard if calibration fails
+### Product Constraints
+- Calibration is a separate workstream and not owned by opponent module tasks.
+- Mock vs real EEG input should stay configurable.
+- Difficulty policy must weight stress/frustration more than score.
 
-  ### Testing
-  - All game engine functions must have unit tests
-  - All WebSocket contracts must have integration tests
-  - Calibration algorithm must have property-based tests
-  - No visual regression tests (manual only)
+## AI Opponent Personality Contract
 
-  ### Security
-  - No PII stored (session IDs are ephemeral UUIDs)
-  - OpenAI API key server-side only
-  - Rate limit GPT taunt requests (max 1/3s per session)
-  - Validate all client→server messages with Zod
+### Input (frontend -> backend)
+`game_event` payload contains:
+- event type: `player_score | ai_score | near_score`
+- current score
+- current difficulty (0..1)
+- optional near-score context
 
-  ## Prohibited Patterns
+### Backend context
+- latest command-centre metrics: stress, frustration, focus, alertness (0..1)
+- backend-derived prior difficulty
 
-  - ❌ React state for game loop variables (position, velocity)
-  - ❌ Heavy ML training for calibration (must be closed-form)
-  - ❌ Inline Tailwind classes longer than 12 tokens (extract to components)
-  - ❌ WebSocket events without TypeScript types
-  - ❌ Blocking operations in game loop
-  - ❌ CSS frameworks other than Tailwind
-  - ❌ Medical-grade stress detection claims
+### Output (backend -> frontend)
+`opponent_update` payload includes:
+- `taunt_text`
+- `difficulty`: previous/model_target/final
+- `speech.audio_base64` (MP3)
+- metric snapshot and latency metadata
 
-  ## Success Criteria
+## Prohibited Patterns
 
-  1. Game runs at stable 60 FPS on mid-range laptop
-  2. Calibration completes in < 30 seconds total
-  3. Paddle responds to EEG within 50ms (perceptually instant)
-  4. Taunts are contextual and entertaining
-  5. AI difficulty adapts smoothly (not jarring)
-  6. Code passes type-check with strict mode
+- React state for high-frequency game-loop physics values
+- Unvalidated websocket payloads
+- Opponent responses without bounded difficulty values
+- Backend calls to OpenAI without fallback handling
+- Frontend use of raw OpenAI keys
+
+## Success Criteria
+
+1. Frontend receives opponent update bundles for game events over websocket.
+2. Difficulty adjusts smoothly with stress-dominant weighting.
+3. Taunts remain playful and safe.
+4. Speech payload is playable by frontend.
+5. System remains usable when OpenAI calls fail (fallback mode).
