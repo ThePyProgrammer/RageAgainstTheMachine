@@ -1,4 +1,5 @@
 import csv
+import os
 from datetime import datetime
 
 from shared.config.logging import get_logger
@@ -17,6 +18,7 @@ class SessionManager:
         """Create CSV file for session data."""
         session_timestamp = self.session_start_time.strftime("%Y%m%d_%H%M%S")
         self.file_path = f"data/raw/eeg/session_{session_timestamp}.csv"
+        os.makedirs(os.path.dirname(self.file_path), exist_ok=True)
 
         with open(self.file_path, "w", newline="") as f:
             csv.writer(f).writerow(header)

@@ -3,11 +3,13 @@ import BCIDashboardPage from "@/pages/EEGStreamingPage";
 import BFMPage from "@/pages/BrainFoundationModelPage";
 import PulseDetectorPage from "@/pages/WebcamPage";
 import MotorImageryPage from "@/pages/MotorImageryPage";
+import CommandCentreSignalsPage from "@/pages/CommandCentreSignalsPage";
 import {
   Activity,
   Heart,
   Brain,
   BrainCog,
+  Gauge,
 } from "lucide-react";
 import type { ComponentType } from "react";
 
@@ -37,6 +39,17 @@ export const routes: AppRoute[] = [
     breadcrumbs: [
       { name: "Home", path: "/" },
       { name: "EEG Streaming", path: "/eeg" },
+    ],
+  },
+  {
+    path: "/eeg/command-centre",
+    label: "Command Centre",
+    element: CommandCentreSignalsPage,
+    icon: Gauge,
+    nav: true,
+    breadcrumbs: [
+      { name: "Home", path: "/" },
+      { name: "Command Centre", path: "/eeg/command-centre" },
     ],
   },
   {

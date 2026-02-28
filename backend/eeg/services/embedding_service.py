@@ -124,7 +124,7 @@ class EmbeddingProcessor:
         self.model.eval()
 
         # Initialize projection head from checkpoint if available
-        checkpoint_data = torch.load(str(checkpoint), map_location=self.device)
+        checkpoint_data = torch.load(str(checkpoint), map_location=self.device, weights_only=False)
 
         if "model_state_dict" in checkpoint_data:
             self.model.load_state_dict(checkpoint_data["model_state_dict"])

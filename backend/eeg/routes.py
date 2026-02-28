@@ -294,3 +294,35 @@ async def stream_websocket(websocket: WebSocket):
             await websocket.close()
         except Exception:
             pass
+
+
+@router.websocket("/ccsignals/ws")
+async def command_centre_signals_websocket(websocket: WebSocket):
+    """WebSocket endpoint for command-centre EEG-derived cognitive signals."""
+    await websocket.accept()
+    streamer = get_active_streamer()
+
+    if not hasattr(streamer, "register_cc_client"):
+        await websocket.send_json({"error": "Command-centre signals are unavailable"})
+        await websocket.close(code=1011)
+        return
+
+    streamer.register_cc_client(websocket)
+
+    try:
+        while True:
+            try:
+                await websocket.receive_text()
+            except WebSocketDisconnect as exc:
+                logger.info("CC signals client disconnected: code=%s", exc.code)
+                break
+    except Exception as e:
+        logger.error("Command-centre WebSocket error", exc_info=True)
+        await websocket.send_json({"error": str(e)})
+        await websocket.close(code=1011)
+    finally:
+        streamer.unregister_cc_client(websocket)
+        try:
+            await websocket.close()
+        except Exception:
+            pass
