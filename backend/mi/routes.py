@@ -123,14 +123,63 @@ def _reset_calibration_state(eeg_stream) -> None:
     calibration_processor = None
 
 
-def _build_mi_epoch_processor(callback) -> MIProcessor:
-    processor = MIProcessor(
-        epoch_samples=750,  # 3 seconds @ 250Hz live stream rate
-        n_channels=8,  # Cyton stream channels
-        target_samples=480,  # 3 seconds @ 160Hz model rate
-        source_rate=250.0,
-        target_rate=160.0,
+def _build_mi_processor_config(eeg_stream, mi_config: dict, log_prefix: str) -> dict:
+    """Build MIProcessor kwargs using stream metadata and MI config."""
+    target_channels = list(mi_config["preprocessing"]["channels"])
+    source_channels = list(getattr(eeg_stream, "channel_names", []))
+    source_rate = float(getattr(eeg_stream, "sampling_rate", 250.0))
+    target_rate = float(mi_config["preprocessing"]["sampling_rate"])
+    epoch_seconds = float(mi_config["epochs"]["tmax"]) - float(
+        mi_config["epochs"]["tmin"]
     )
+    epoch_samples = max(1, int(round(epoch_seconds * source_rate)))
+    target_samples = max(1, int(round(epoch_seconds * target_rate)))
+
+    channel_indices = None
+    if source_channels:
+        channel_indices = _resolve_channel_indices(source_channels, target_channels)
+        if channel_indices is not None:
+            logger.info(
+                "[%s] Channel mapping %s -> %s using indices %s",
+                log_prefix,
+                source_channels,
+                target_channels,
+                channel_indices,
+            )
+        else:
+            logger.warning(
+                "[%s] Could not map source channels %s to target channels %s. "
+                "Using native channel order as fallback.",
+                log_prefix,
+                source_channels,
+                target_channels,
+            )
+
+    processor_channels = (
+        len(channel_indices)
+        if channel_indices is not None
+        else (
+            len(source_channels)
+            if source_channels
+            else (len(target_channels) if target_channels else 1)
+        )
+    )
+    return {
+        "epoch_samples": epoch_samples,
+        "n_channels": processor_channels,
+        "target_samples": target_samples,
+        "source_rate": source_rate,
+        "target_rate": target_rate,
+        "channel_indices": channel_indices,
+    }
+
+
+def _build_mi_epoch_processor(eeg_stream, callback, log_prefix: str) -> MIProcessor:
+    """Create and initialize MI processor for the active EEG stream."""
+    mi_config = mi_init.load_mi_config()
+    processor_config = _build_mi_processor_config(eeg_stream, mi_config, log_prefix)
+
+    processor = MIProcessor(**processor_config)
     processor.set_callback(callback)
     return processor
 
@@ -196,52 +245,6 @@ async def websocket_endpoint(websocket: WebSocket):
                     # Create thread-safe prediction queue for communication between EEG thread and WebSocket
                     prediction_queue = queue.Queue(maxsize=100)
 
-                    mi_config = mi_init.load_mi_config()
-                    target_channels = list(mi_config["preprocessing"]["channels"])
-                    source_channels = list(getattr(eeg_stream, "channel_names", []))
-                    source_rate = float(getattr(eeg_stream, "sampling_rate", 250.0))
-                    target_rate = float(mi_config["preprocessing"]["sampling_rate"])
-                    epoch_seconds = float(mi_config["epochs"]["tmax"]) - float(
-                        mi_config["epochs"]["tmin"]
-                    )
-                    epoch_samples = max(1, int(round(epoch_seconds * source_rate)))
-                    target_samples = max(1, int(round(epoch_seconds * target_rate)))
-
-                    channel_indices = None
-                    if source_channels:
-                        channel_indices = _resolve_channel_indices(
-                            source_channels, target_channels
-                        )
-                        if channel_indices is not None:
-                            logger.info(
-                                "[MI-WS] Channel mapping %s -> %s using indices %s",
-                                source_channels,
-                                target_channels,
-                                channel_indices,
-                            )
-                        else:
-                            logger.warning(
-                                "[MI-WS] Could not map source channels %s to target channels %s. "
-                                "Using native channel order as fallback.",
-                                source_channels,
-                                target_channels,
-                            )
-
-                    processor_channels = (
-                        len(channel_indices)
-                        if channel_indices is not None
-                        else (len(source_channels) if source_channels else 8)
-                    )
-
-                    mi_processor = MIProcessor(
-                        epoch_samples=epoch_samples,
-                        n_channels=processor_channels,
-                        target_samples=target_samples,
-                        source_rate=source_rate,
-                        target_rate=target_rate,
-                        channel_indices=channel_indices,
-                    )
-
                     def classification_callback(eeg_epoch: np.ndarray):
                         """Called when an epoch is ready for classification."""
                         try:
@@ -283,7 +286,11 @@ async def websocket_endpoint(websocket: WebSocket):
                                 exc_info=True,
                             )
 
-                    mi_processor.set_callback(classification_callback)
+                    mi_processor = _build_mi_epoch_processor(
+                        eeg_stream,
+                        classification_callback,
+                        log_prefix="MI-WS",
+                    )
 
                     # Register MI processor with EEG stream
                     eeg_stream.mi_processor = mi_processor
@@ -299,7 +306,10 @@ async def websocket_endpoint(websocket: WebSocket):
                     )
 
                     # Start sending predictions from queue
-                    asyncio.create_task(send_predictions_from_queue(websocket))
+                    if sender_task is None or sender_task.done():
+                        sender_task = asyncio.create_task(
+                            send_predictions_from_queue(websocket)
+                        )
 
                 else:
                     logger.warning("[MI-WS] MI already running")
@@ -307,56 +317,6 @@ async def websocket_endpoint(websocket: WebSocket):
                         {"status": "running", "msg": "MI streaming already active"}
                     )
                     continue
-
-                is_running = True
-                prediction_queue = queue.Queue(maxsize=100)
-
-                def classification_callback(eeg_epoch: np.ndarray):
-                    """Classify epoch and queue prediction payload."""
-                    try:
-                        move_command, confidence = mi_controller.predict_and_command(
-                            eeg_epoch
-                        )
-                        payload = {
-                            "type": "prediction",
-                            "prediction": int(mi_controller.last_prediction),
-                            "label": mi_controller.prediction_label(),
-                            "confidence": float(confidence) * 100.0,
-                            "command": move_command,
-                            "status": "MOVING"
-                            if move_command != "hover"
-                            else "HOVERING",
-                            "timestamp": time.time(),
-                        }
-                        try:
-                            prediction_queue.put_nowait(payload)
-                        except queue.Full:
-                            try:
-                                prediction_queue.get_nowait()
-                                prediction_queue.put_nowait(payload)
-                            except Exception:
-                                logger.warning(
-                                    "[MI-Processor] Dropped prediction due to queue pressure"
-                                )
-                    except Exception as exc:
-                        logger.error(
-                            "[MI-Processor] Classification error: %s",
-                            exc,
-                            exc_info=True,
-                        )
-
-                mi_processor = _build_mi_epoch_processor(classification_callback)
-                eeg_stream.mi_processor = mi_processor
-                eeg_stream.enable_mi = True
-
-                await websocket.send_json(
-                    {
-                        "status": "started",
-                        "msg": "MI streaming started - using live EEG data from headset",
-                    }
-                )
-                if sender_task is None or sender_task.done():
-                    sender_task = asyncio.create_task(send_predictions_from_queue(websocket))
             else:
                 logger.info("[MI-WS] STOP command received")
                 _reset_mi_state(eeg_stream)
@@ -438,7 +398,11 @@ async def start_calibration(payload: CalibrationStartRequest):
 
     _reset_calibration_state(eeg_stream)
     current_calibrator = MICalibrator(payload.user_id)
-    calibration_processor = _build_mi_epoch_processor(current_calibrator.add_epoch)
+    calibration_processor = _build_mi_epoch_processor(
+        eeg_stream,
+        current_calibrator.add_epoch,
+        log_prefix="MI-Cal",
+    )
     eeg_stream.calibration_processor = calibration_processor
     eeg_stream.enable_calibration = True
 
