@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { API_ENDPOINTS } from "@/config/api";
 import { CalibrationWizard } from "@/features/pong/components/CalibrationWizard";
-import { DebugOverlay } from "@/features/pong/components/DebugOverlay";
 import { GameCanvas } from "@/features/pong/components/GameCanvas";
 import { KeyboardHints } from "@/features/pong/components/KeyboardHints";
 import { MenuScreen } from "@/features/pong/components/MenuScreen";
@@ -77,7 +76,6 @@ const sleep = (ms: number) =>
     window.setTimeout(resolve, ms);
   });
 
-const clamp01 = (value: number): number => Math.max(0, Math.min(1, value));
 const clampSignal = (value: number): number => Math.max(-1, Math.min(1, value));
 const EEG_WAVE_POINTS= 42;
 const EEG_STREAM_STALE_MS = 1800;
@@ -882,7 +880,6 @@ export default function PongPage() {
               onExpire={() => expireTaunt(activeTaunt.timestamp)}
             />
           )}
-          <DebugOverlay {...debug} />
           <KeyboardHints mode="game" />
           <div className="absolute top-2 right-2 z-40 flex items-center gap-1">
             <button

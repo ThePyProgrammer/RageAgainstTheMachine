@@ -16,6 +16,7 @@ import {
 import type { ComponentType } from "react";
 import PongPage from "@/pages/PongPage";
 import BreakoutPage from "@/pages/BreakoutPage";
+import FlappyBirdPage from "@/pages/FlappyBirdPage";
 
 export type AppRoute = {
   path: string;
@@ -111,5 +112,13 @@ export const routes: AppRoute[] = [
     element: Combat3DPage,
     nav: true,
     breadcrumbs: [{ name: "Home", path: "/" }, { name: "Combat 3D", path: "/combat3d" }],
+  },
+  {
+    path: "/flappy-bird",
+    label: "Flappy Bird",
+    element: FlappyBirdPage,
+    icon: Gamepad2,
+    nav: true,
+    breadcrumbs: [{ name: "Home", path: "/" }, { name: "Flappy Bird", path: "/flappy-bird" }],
   },
 ];
