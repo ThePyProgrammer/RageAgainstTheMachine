@@ -43,9 +43,9 @@ const PROGRESS_TICK_MS = 120;
 const DEFAULT_STRESS_LEVEL = 0.24;
 const INITIAL_OPPONENT_DIFFICULTY = 0.5;
 const OPPONENT_DEBUG = import.meta.env.DEV;
-const EEG_WAVE_POINTS = 42;
-const EEG_DEFAULT_TICK_MS = 120;
-const EEG_STREAM_STALE_MS = 1800;
+const EEG_WS_INTERVAL_MS = 120;
+const EEG_COMMAND_HOLD_MS = 900;
+const EEG_MIN_CONFIDENCE = 56;
 
 const createRuntimeState = (): RuntimeState => ({
   width: 960,
@@ -192,6 +192,8 @@ export default function PongPage() {
   const runtimeRef = useRef<RuntimeState>(createRuntimeState());
   const pausedRef = useRef(false);
   const miSocketRef = useRef<WebSocket | null>(null);
+  const eegHoldTimerRef = useRef<number | null>(null);
+  const eegCommandHoldUntilRef = useRef(0);
   const calibrationRunIdRef = useRef(0);
   const opponentDifficultyRef = useRef(INITIAL_OPPONENT_DIFFICULTY);
   const opponentEventCounterRef = useRef(0);
@@ -260,6 +262,11 @@ export default function PongPage() {
     (sendStop: boolean) => {
       const ws = miSocketRef.current;
       miSocketRef.current = null;
+      if (eegHoldTimerRef.current !== null) {
+        window.clearTimeout(eegHoldTimerRef.current);
+        eegHoldTimerRef.current = null;
+      }
+      eegCommandHoldUntilRef.current = 0;
       if (ws && ws.readyState === WebSocket.OPEN && sendStop) {
         ws.send(JSON.stringify({ action: "stop" }));
       }
@@ -272,6 +279,21 @@ export default function PongPage() {
     },
     [publishDebug, resetEegPane],
   );
+
+  const applyEegCommand = useCallback((command: PaddleCommand) => {
+    setEegCommand(command);
+    const holdUntil = performance.now() + EEG_COMMAND_HOLD_MS;
+    eegCommandHoldUntilRef.current = holdUntil;
+    if (eegHoldTimerRef.current !== null) {
+      window.clearTimeout(eegHoldTimerRef.current);
+    }
+    eegHoldTimerRef.current = window.setTimeout(() => {
+      if (performance.now() >= eegCommandHoldUntilRef.current) {
+        setEegCommand("none");
+      }
+      eegHoldTimerRef.current = null;
+    }, EEG_COMMAND_HOLD_MS + 40);
+  }, []);
 
   const resetRuntime = useCallback(() => {
     Object.assign(runtimeRef.current, createRuntimeState());
@@ -429,7 +451,7 @@ export default function PongPage() {
       }, 8000);
 
       ws.onopen = () => {
-        ws.send(JSON.stringify({ action: "start", interval_ms: 1000, reset: true }));
+        ws.send(JSON.stringify({ action: "start", interval_ms: EEG_WS_INTERVAL_MS, reset: true }));
       };
 
       ws.onmessage = (event) => {
@@ -461,45 +483,7 @@ export default function PongPage() {
         }
 
         if (payload.type === "prediction") {
-          const command = mapCommandToPaddle(payload.command);
-          setEegCommand(command);
-
-          const now = performance.now();
-          eegLastPacketAtRef.current = now;
-
-          const packetRateWindow = eegPacketRateWindowRef.current;
-          packetRateWindow.packetCount += 1;
-          const elapsed = now - packetRateWindow.windowStartMs;
-          if (elapsed >= 1000) {
-            packetRateWindow.packetRateHz = (packetRateWindow.packetCount * 1000) / elapsed;
-            packetRateWindow.packetCount = 0;
-            packetRateWindow.windowStartMs = now;
-          }
-
-          const rawConfidence = Number(payload.confidence ?? 0);
-          const confidence = Number.isFinite(rawConfidence)
-            ? clamp01(rawConfidence > 1 ? rawConfidence / 100 : rawConfidence)
-            : 0;
-          const activeHemisphere: EegHemisphere = command === "right" ? "right" : "left";
-          const leftPower = activeHemisphere === "left"
-            ? 0.56 + confidence * 0.36
-            : Math.max(0.12, 0.26 - confidence * 0.08);
-          const rightPower = activeHemisphere === "right"
-            ? 0.56 + confidence * 0.36
-            : Math.max(0.12, 0.26 - confidence * 0.08);
-          const direction = activeHemisphere === "right" ? 1 : -1;
-          const sample = clampSignal(
-            direction * (0.36 + confidence * 0.46)
-              + Math.sin(now / 95) * (0.15 + confidence * 0.32),
-          );
-
-          pushEegSample(sample, {
-            leftPower,
-            rightPower,
-            confidence,
-            packetRateHz: packetRateWindow.packetRateHz,
-            activeHemisphere,
-          });
+          setEegCommand(mapCommandToPaddle(payload.command));
         }
       };
 
@@ -522,7 +506,7 @@ export default function PongPage() {
         }
       };
     });
-  }, [publishDebug, pushEegSample, teardownMiSocket]);
+  }, [publishDebug, teardownMiSocket]);
 
   const waitWithProgress = useCallback(async (durationMs: number, start: number, end: number) => {
     const startedAt = performance.now();

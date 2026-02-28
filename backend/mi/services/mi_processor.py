@@ -20,6 +20,7 @@ class MIProcessor:
         target_samples: int = 480,
         source_rate: float = 250.0,
         target_rate: float = 160.0,
+        channel_indices: Optional[list[int]] = None,
     ):
         """Initialize MI processor.
 
@@ -29,20 +30,28 @@ class MIProcessor:
             target_samples: Number of samples expected by the model (after resampling)
             source_rate: Sampling rate of live EEG stream (Hz)
             target_rate: Sampling rate model was trained on (Hz)
+            channel_indices: Optional input-channel indices used to subset/reorder
+                incoming samples before buffering.
         """
         self.epoch_samples = epoch_samples
         self.n_channels = n_channels
         self.target_samples = target_samples
         self.source_rate = source_rate
         self.target_rate = target_rate
+        self.channel_indices = channel_indices
         self.buffer = np.zeros((n_channels, 0))
         self.classification_callback: Optional[Callable] = None
         self.epoch_count = 0
 
+        channel_mode = (
+            f"subset/reorder={channel_indices}"
+            if channel_indices is not None
+            else "direct"
+        )
         logger.info(
             f"[MI-Processor] Initialized - epoch_samples: {epoch_samples}, "
             f"n_channels: {n_channels}, will resample {epoch_samples}@{source_rate}Hz "
-            f"to {target_samples}@{target_rate}Hz"
+            f"to {target_samples}@{target_rate}Hz, mode: {channel_mode}"
         )
 
     def set_callback(self, callback: Callable):
@@ -60,15 +69,28 @@ class MIProcessor:
         Args:
             samples: Filtered EEG data of shape (n_channels, n_samples)
         """
-        if samples.shape[0] != self.n_channels:
+        working_samples = samples
+
+        if self.channel_indices is not None:
+            max_idx = max(self.channel_indices, default=-1)
+            if max_idx >= samples.shape[0]:
+                logger.warning(
+                    "[MI-Processor] Cannot select channel indices %s from %s channels",
+                    self.channel_indices,
+                    samples.shape[0],
+                )
+                return
+            working_samples = samples[self.channel_indices, :]
+
+        if working_samples.shape[0] != self.n_channels:
             logger.warning(
                 f"[MI-Processor] Channel mismatch: expected {self.n_channels}, "
-                f"got {samples.shape[0]}"
+                f"got {working_samples.shape[0]}"
             )
             return
 
         # Append to buffer
-        self.buffer = np.hstack((self.buffer, samples))
+        self.buffer = np.hstack((self.buffer, working_samples))
 
         # Process complete epochs
         while self.buffer.shape[1] >= self.epoch_samples:

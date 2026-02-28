@@ -7,6 +7,12 @@ import mne
 import numpy as np
 from tqdm import tqdm
 
+CHANNEL_ALIASES = {
+    # PhysioNet EEGBCI uses T9/T10. Accept TP9/TP10 in config for Muse compatibility.
+    "TP9": "T9",
+    "TP10": "T10",
+}
+
 
 class PhysioNetDataset:
     """PhysioNet Motor Movement/Imagery Dataset handler.
@@ -41,6 +47,39 @@ class PhysioNetDataset:
             "T1": 1,  # Left fist
             "T2": 2,  # Right fist
         }
+
+    def _resolve_channels(self, available_channels: List[str], channels: List[str]) -> List[str]:
+        """Resolve requested channel names against available montage names."""
+        available_lookup = {name.upper(): name for name in available_channels}
+        resolved = []
+        remapped = {}
+        missing = []
+
+        for requested_name in channels:
+            requested_upper = requested_name.upper()
+            resolved_name = available_lookup.get(requested_upper)
+
+            if resolved_name is None and requested_upper in CHANNEL_ALIASES:
+                alias_name = CHANNEL_ALIASES[requested_upper]
+                resolved_name = available_lookup.get(alias_name)
+                if resolved_name is not None:
+                    remapped[requested_name] = resolved_name
+
+            if resolved_name is None:
+                missing.append(requested_name)
+            else:
+                resolved.append(resolved_name)
+
+        if missing:
+            raise ValueError(
+                "Requested channels not found in recording: "
+                f"{missing}. Available channels: {available_channels}"
+            )
+
+        if remapped:
+            print(f"  Channel alias mapping applied: {remapped}")
+
+        return resolved
 
     def download_subject(self, subject_id: int, runs: List[int] = None) -> bool:
         """Download data for a single subject.
@@ -122,7 +161,8 @@ class PhysioNetDataset:
         if use_all_channels:
             raw.pick_types(eeg=True, exclude=[])
         else:
-            raw.pick_channels(channels, ordered=True)
+            resolved_channels = self._resolve_channels(raw.ch_names, channels)
+            raw.pick_channels(resolved_channels, ordered=True)
 
         selected_channel_names = list(raw.ch_names)
 

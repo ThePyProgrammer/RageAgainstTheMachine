@@ -22,14 +22,35 @@ class LaBraMProbe(nn.Module):
         self.encoder = LaBraMEncoder.from_pretrained(str(checkpoint_path))
         self.channel_names = channel_names
         self.pooling = pooling
-        self.freeze_encoder = freeze_encoder
+        self.freeze_encoder = True
+        self.unfreeze_last_n_blocks = 0
+        self.encoder_has_trainable_params = False
+        self.configure_trainable_encoder(
+            freeze_encoder=freeze_encoder,
+            unfreeze_last_n_blocks=unfreeze_last_n_blocks,
+        )
+
+        embed_dim = self.encoder.model.embed_dim
+        self.classifier = nn.Sequential(
+            nn.Linear(embed_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, num_classes),
+        )
+
+    def configure_trainable_encoder(
+        self, freeze_encoder: bool, unfreeze_last_n_blocks: int = 0
+    ) -> None:
+        # Training policy:
+        # - freeze_encoder=True: freeze all encoder weights, then optionally unfreeze last N blocks.
+        # - freeze_encoder=False: full encoder fine-tuning.
+        self.freeze_encoder = bool(freeze_encoder)
         self.unfreeze_last_n_blocks = max(0, int(unfreeze_last_n_blocks))
 
-        if freeze_encoder:
-            for param in self.encoder.parameters():
-                param.requires_grad = False
+        for param in self.encoder.parameters():
+            param.requires_grad = not self.freeze_encoder
 
-        if self.unfreeze_last_n_blocks > 0:
+        if self.freeze_encoder and self.unfreeze_last_n_blocks > 0:
             total_blocks = len(self.encoder.model.blocks)
             n = min(self.unfreeze_last_n_blocks, total_blocks)
             for block in self.encoder.model.blocks[-n:]:
@@ -42,14 +63,6 @@ class LaBraMProbe(nn.Module):
 
         self.encoder_has_trainable_params = any(
             p.requires_grad for p in self.encoder.parameters()
-        )
-
-        embed_dim = self.encoder.model.embed_dim
-        self.classifier = nn.Sequential(
-            nn.Linear(embed_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_dim, num_classes),
         )
 
     def _pool_tokens(self, tokens: torch.Tensor) -> torch.Tensor:
@@ -221,20 +234,28 @@ val_loader = DataLoader(
 
 model_cfg = config["model"]
 pooling_mode = "cls"
-full_finetune = True
-unfreeze_last_n_blocks = 0
-head_lr = 2e-4
-encoder_lr = 2e-5
+# Next run strategy:
+# 1) Stage-1 train head only.
+# 2) Stage-2 unfreeze only last encoder blocks with small LR.
+stage1_head_only_epochs = 12
+stage2_unfreeze_last_n_blocks = 2
+stage1_head_lr = 1e-4
+stage2_head_lr = 5e-5
+stage2_encoder_lr = 5e-6
 weight_decay = 1e-4
-label_smoothing = 0.05
+label_smoothing = 0.0
 max_grad_norm = 1.0
 warmup_ratio = 0.1
+use_mcc_for_early_stop = True
 print(
     f"  Overrides | pooling={pooling_mode} "
-    f"full_finetune={full_finetune} "
-    f"unfreeze_last_n_blocks={unfreeze_last_n_blocks} "
-    f"head_lr={head_lr} encoder_lr={encoder_lr} "
-    f"label_smoothing={label_smoothing}"
+    f"stage1_head_only_epochs={stage1_head_only_epochs} "
+    f"stage2_unfreeze_last_n_blocks={stage2_unfreeze_last_n_blocks} "
+    f"stage1_head_lr={stage1_head_lr} "
+    f"stage2_head_lr={stage2_head_lr} "
+    f"stage2_encoder_lr={stage2_encoder_lr} "
+    f"label_smoothing={label_smoothing} "
+    f"use_mcc_for_early_stop={use_mcc_for_early_stop}"
 )
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -248,8 +269,8 @@ model = LaBraMProbe(
     checkpoint_path=checkpoint_path,
     channel_names=channel_names,
     num_classes=num_classes,
-    freeze_encoder=not full_finetune,
-    unfreeze_last_n_blocks=unfreeze_last_n_blocks,
+    freeze_encoder=True,
+    unfreeze_last_n_blocks=0,
     pooling=pooling_mode,
     hidden_dim=model_cfg.get("hidden_dim", 256),
     dropout=model_cfg.get("dropout", 0.3),
@@ -385,33 +406,26 @@ if use_class_weighted_loss:
 else:
     criterion = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
 
-head_params = [p for p in model.classifier.parameters() if p.requires_grad]
-encoder_params = [p for p in model.encoder.parameters() if p.requires_grad]
-if encoder_params:
-    optimizer = optim.AdamW(
-        [
-            {"params": head_params, "lr": head_lr},
-            {"params": encoder_params, "lr": encoder_lr},
-        ],
-        weight_decay=weight_decay,
-    )
-else:
-    optimizer = optim.AdamW(head_params, lr=head_lr, weight_decay=weight_decay)
+def build_optimizer(
+    model: LaBraMProbe, head_lr: float, encoder_lr: float, weight_decay: float
+):
+    head_params = [p for p in model.classifier.parameters() if p.requires_grad]
+    encoder_params = [p for p in model.encoder.parameters() if p.requires_grad]
 
-num_head_params = sum(p.numel() for p in head_params)
-num_encoder_params = sum(p.numel() for p in encoder_params)
-print(
-    f"  Trainable params | head={num_head_params:,} "
-    f"encoder={num_encoder_params:,} "
-    f"(unfreeze_last_n_blocks={model.unfreeze_last_n_blocks})"
-)
-if num_encoder_params > 0:
-    print(
-        f"  Optimizer LRs | head={head_lr} encoder={encoder_lr} "
-        f"weight_decay={weight_decay}"
-    )
-else:
-    print(f"  Optimizer LR  | head={head_lr} weight_decay={weight_decay}")
+    if encoder_params:
+        optimizer = optim.AdamW(
+            [
+                {"params": head_params, "lr": head_lr},
+                {"params": encoder_params, "lr": encoder_lr},
+            ],
+            weight_decay=weight_decay,
+        )
+    else:
+        optimizer = optim.AdamW(head_params, lr=head_lr, weight_decay=weight_decay)
+
+    num_head_params = sum(p.numel() for p in head_params)
+    num_encoder_params = sum(p.numel() for p in encoder_params)
+    return optimizer, num_head_params, num_encoder_params
 
 use_amp = device == "cuda"
 amp_dtype = torch.float16 if use_amp else None
@@ -429,31 +443,107 @@ save_path = (
 )
 os.makedirs(save_path.parent, exist_ok=True)
 
-best_val_acc = 0.0
-patience_counter = 0
 patience = config["training"]["early_stopping_patience"]
 num_epochs = config["training"]["num_epochs"]
-
 steps_per_epoch = max(1, len(train_loader))
-total_steps = max(1, num_epochs * steps_per_epoch)
-warmup_steps = int(total_steps * warmup_ratio)
 
-def lr_lambda(current_step: int) -> float:
-    if warmup_steps > 0 and current_step < warmup_steps:
-        return float(current_step + 1) / float(warmup_steps)
-    progress = (current_step - warmup_steps) / max(1, total_steps - warmup_steps)
-    progress = min(max(progress, 0.0), 1.0)
-    return 0.5 * (1.0 + np.cos(np.pi * progress))
+def build_scheduler(optimizer, remaining_epochs: int, warmup_ratio: float):
+    total_steps = max(1, remaining_epochs * steps_per_epoch)
+    warmup_steps = int(total_steps * warmup_ratio)
 
-scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
+    def lr_lambda(current_step: int) -> float:
+        if warmup_steps > 0 and current_step < warmup_steps:
+            return float(current_step + 1) / float(warmup_steps)
+        progress = (current_step - warmup_steps) / max(1, total_steps - warmup_steps)
+        progress = min(max(progress, 0.0), 1.0)
+        return 0.5 * (1.0 + np.cos(np.pi * progress))
+
+    scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
+    return scheduler, total_steps, warmup_steps
+
+def binary_mcc_from_tensors(y_pred: torch.Tensor, y_true: torch.Tensor) -> float:
+    tp = int(((y_pred == 1) & (y_true == 1)).sum().item())
+    tn = int(((y_pred == 0) & (y_true == 0)).sum().item())
+    fp = int(((y_pred == 1) & (y_true == 0)).sum().item())
+    fn = int(((y_pred == 0) & (y_true == 1)).sum().item())
+    denom = np.sqrt(float((tp + fp) * (tp + fn) * (tn + fp) * (tn + fn)))
+    if denom == 0.0:
+        return 0.0
+    return float((tp * tn - fp * fn) / denom)
+
+selection_metric_name = (
+    "mcc" if (num_classes == 2 and use_mcc_for_early_stop) else "bal_acc"
+)
+stage2_start_epoch = max(1, int(stage1_head_only_epochs))
+stage2_enabled = stage2_unfreeze_last_n_blocks > 0 and stage2_start_epoch < num_epochs
+current_stage = "stage1_head_only"
+
+optimizer, num_head_params, num_encoder_params = build_optimizer(
+    model=model,
+    head_lr=stage1_head_lr,
+    encoder_lr=stage2_encoder_lr,
+    weight_decay=weight_decay,
+)
+scheduler, total_steps, warmup_steps = build_scheduler(
+    optimizer=optimizer,
+    remaining_epochs=num_epochs,
+    warmup_ratio=warmup_ratio,
+)
+
+print(
+    f"  Initial stage={current_stage} | "
+    f"Trainable params head={num_head_params:,} encoder={num_encoder_params:,}"
+)
+if num_encoder_params > 0:
+    print(
+        f"  Optimizer LRs | head={stage1_head_lr} encoder={stage2_encoder_lr} "
+        f"weight_decay={weight_decay}"
+    )
+else:
+    print(f"  Optimizer LR  | head={stage1_head_lr} weight_decay={weight_decay}")
 print(
     f"  Scheduler | total_steps={total_steps} "
     f"warmup_steps={warmup_steps} warmup_ratio={warmup_ratio}"
 )
-
 print(f"  Epochs: {num_epochs}  |  Early-stop patience: {patience}\n")
 
+best_val_acc = 0.0
+best_val_bal_acc = 0.0
+best_val_mcc = -1.0 if num_classes == 2 else float("nan")
+best_selection_metric = -float("inf")
+patience_counter = 0
+
 for epoch in range(num_epochs):
+    if stage2_enabled and epoch == stage2_start_epoch:
+        model.configure_trainable_encoder(
+            freeze_encoder=True,
+            unfreeze_last_n_blocks=stage2_unfreeze_last_n_blocks,
+        )
+        current_stage = f"stage2_unfreeze_last_{stage2_unfreeze_last_n_blocks}"
+        optimizer, num_head_params, num_encoder_params = build_optimizer(
+            model=model,
+            head_lr=stage2_head_lr,
+            encoder_lr=stage2_encoder_lr,
+            weight_decay=weight_decay,
+        )
+        scheduler, total_steps, warmup_steps = build_scheduler(
+            optimizer=optimizer,
+            remaining_epochs=max(1, num_epochs - epoch),
+            warmup_ratio=warmup_ratio,
+        )
+        print(
+            f"\n  Stage switch at epoch {epoch+1}: {current_stage} | "
+            f"Trainable params head={num_head_params:,} encoder={num_encoder_params:,}"
+        )
+        print(
+            f"  Optimizer LRs | head={stage2_head_lr} encoder={stage2_encoder_lr} "
+            f"weight_decay={weight_decay}"
+        )
+        print(
+            f"  Scheduler reset | total_steps={total_steps} "
+            f"warmup_steps={warmup_steps}\n"
+        )
+
     model.train()
     train_losses = []
     train_correct = 0
@@ -534,24 +624,59 @@ for epoch in range(num_epochs):
         per_class_acc.append(class_acc)
     print(f"  Val per-class acc={per_class_acc}")
 
-    if val_acc > best_val_acc:
-        best_val_acc = val_acc
+    valid_class_acc = [a for a in per_class_acc if not np.isnan(a)]
+    val_bal_acc = float(np.mean(valid_class_acc)) if valid_class_acc else 0.0
+    if num_classes == 2:
+        val_mcc = binary_mcc_from_tensors(val_preds_flat, val_targets_flat)
+        print(f"  Val bal_acc={val_bal_acc:.4f} val_mcc={val_mcc:.4f}")
+    else:
+        val_mcc = float("nan")
+        print(f"  Val bal_acc={val_bal_acc:.4f}")
+
+    selection_metric = val_mcc if selection_metric_name == "mcc" else val_bal_acc
+    print(
+        f"  Selection metric ({selection_metric_name})={selection_metric:.4f} "
+        f"| stage={current_stage}"
+    )
+
+    if selection_metric > best_selection_metric:
+        best_selection_metric = selection_metric
+        best_val_acc = max(best_val_acc, val_acc)
+        best_val_bal_acc = max(best_val_bal_acc, val_bal_acc)
+        if num_classes == 2:
+            best_val_mcc = max(best_val_mcc, val_mcc)
         patience_counter = 0
         torch.save(
             {
                 "model_state_dict": model.state_dict(),
                 "config": config,
                 "best_val_acc": best_val_acc,
+                "best_val_bal_acc": best_val_bal_acc,
+                "best_val_mcc": best_val_mcc,
+                "best_selection_metric": best_selection_metric,
+                "best_selection_metric_name": selection_metric_name,
                 "channel_names": channel_names,
             },
             str(save_path),
         )
-        print(f"  New best ({val_acc:.4f}) saved to {save_path}")
+        print(
+            f"  New best ({selection_metric_name}={selection_metric:.4f}, "
+            f"val_acc={val_acc:.4f}) saved to {save_path}"
+        )
     else:
         patience_counter += 1
         if patience_counter >= patience:
             print(f"\nEarly stopping at epoch {epoch+1}.")
             break
 
-print(f"\nTraining complete. Best val acc: {best_val_acc:.4f}")
+print(
+    f"\nTraining complete. Best {selection_metric_name}: {best_selection_metric:.4f} | "
+    f"Best val_acc: {best_val_acc:.4f} | "
+    f"Best val_bal_acc: {best_val_bal_acc:.4f}"
+    + (
+        f" | Best val_mcc: {best_val_mcc:.4f}"
+        if num_classes == 2
+        else ""
+    )
+)
 
