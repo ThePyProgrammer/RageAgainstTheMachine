@@ -8,6 +8,7 @@ export const API_ENDPOINTS = {
   BCI_STOP: `${API_BASE_URL}/bci/stop`,
   BCI_STATUS: `${API_BASE_URL}/bci/status`,
   BCI_DETAILS: `${API_BASE_URL}/bci/details`,
+  BCI_DEVICES: `${API_BASE_URL}/bci/devices`,
   BCI_WS: `${WS_BASE_URL}/bci/ws`,
 
   // Model Selection & Embeddings
@@ -26,3 +27,12 @@ export const API_ENDPOINTS = {
   MI_LATEST: `${API_BASE_URL}/bci/motor_imagery/latest`,
   MI_WS: `${WS_BASE_URL}/mi/ws`,
 } as const;
+
+// Helper to build parameterized start URL
+export const buildStartUrl = (deviceType?: string): string => {
+  const base = API_ENDPOINTS.BCI_START;
+  if (deviceType) {
+    return `${base}?device_type=${encodeURIComponent(deviceType)}`;
+  }
+  return base;
+};

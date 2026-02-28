@@ -8,6 +8,8 @@ from shared.config.app_config import (
     EEG_DRY_RUN,
     ADS1299_MAX_UV,
     RAILED_THRESHOLD_PERCENT,
+    HF_REPO_ID,
+    HF_TOKEN,
 )
 from shared.config.logging import get_logger
 
@@ -16,6 +18,8 @@ from eeg.services.streaming.board_manager import BoardManager
 from eeg.services.streaming.data_processor import DataProcessor
 from eeg.services.streaming.session_manager import SessionManager
 from eeg.services.streaming.websocket_broadcaster import WebSocketBroadcaster
+from shared.storage.hf_store import upload_to_hf
+
 logger = get_logger(__name__)
 
 
@@ -45,15 +49,12 @@ class EEGStreamer:
 
     def start(self):
         if self.is_running:
-            logger.warning("[EEGStreamer] start() called but already running")
             return False, "already_running"
         self.stop_event.clear()
         self.session_start_time = datetime.now()
         if EEG_DRY_RUN:
-            logger.info("[EEGStreamer] DRY_RUN mode - no hardware thread started")
             self.is_running = True
             return True, "dry_run"
-        logger.info("[EEGStreamer] Starting stream thread...")
         self.thread = threading.Thread(target=self._stream_loop, daemon=True)
         self.thread.start()
         self.is_running = True
@@ -70,15 +71,11 @@ class EEGStreamer:
 
     def _stream_loop(self):
         try:
-            logger.info("[Stream] Initializing board...")
             self.board_manager.initialize()
-            logger.info("[Stream] Board initialized, configuring...")
             self.board_manager.board.config_board("d")
             time.sleep(0.5)
 
             channel_info = self.board_manager.get_channel_info()
-            logger.info("[Stream] Channel info: sr=%s, eeg_channels=%s",
-                        channel_info["sampling_rate"], channel_info["eeg_channels"])
             self.session_manager = SessionManager(self.session_start_time)
             self.session_manager.create_file(self.data_processor.build_header())
 
@@ -117,8 +114,6 @@ class EEGStreamer:
 
                 if startup_samples < 1250:
                     startup_samples += new_points_count
-                    if startup_samples >= 1250:
-                        logger.info("[Stream] Warmup complete (%d samples), starting broadcast", startup_samples)
                     continue
 
                 filter_window = self.eeg_buffer.copy()
@@ -202,6 +197,16 @@ class EEGStreamer:
                 )
             if self.session_manager:
                 self.session_manager.log_end()
+                if self.session_manager.file_path and HF_REPO_ID:
+                    try:
+                        remote_path = upload_to_hf(
+                            self.session_manager.file_path, HF_REPO_ID, HF_TOKEN
+                        )
+                        logger.info("[Stream] Uploaded to HF: %s", remote_path)
+                    except Exception as exc:
+                        logger.error(
+                            "[Stream] HF upload failed: %s", exc, exc_info=True
+                        )
             self.is_running = False
 
     def register_client(self, websocket):
@@ -211,8 +216,54 @@ class EEGStreamer:
         self.ws_broadcaster.unregister_client(websocket)
 
 
-streamer = EEGStreamer()
+# --- Multi-device streamer management ---
+
+_cyton_streamer = EEGStreamer()
+_muse_streamer = None  # Lazy-loaded to avoid import errors when pylsl isn't needed
+_active_device_type = "cyton"
+
+
+def _get_muse_streamer():
+    """Lazy-load MuseStreamer to avoid pylsl import when not needed."""
+    global _muse_streamer
+    if _muse_streamer is None:
+        from eeg.services.muse_stream_service import MuseStreamer
+        _muse_streamer = MuseStreamer()
+    return _muse_streamer
+
+
+def get_streamer_for_device(device_type: str):
+    """Get the streamer instance for a given device type."""
+    if device_type == "cyton":
+        return _cyton_streamer
+    elif device_type == "muse_v1":
+        return _get_muse_streamer()
+    else:
+        raise ValueError(f"Unknown device type: {device_type}")
+
+
+def get_active_streamer():
+    """Get the currently active streamer."""
+    return get_streamer_for_device(_active_device_type)
+
+
+def get_active_device_type() -> str:
+    """Get the currently active device type."""
+    return _active_device_type
+
+
+def set_active_device_type(device_type: str):
+    """Set the active device type. Stops any running streamer first."""
+    global _active_device_type
+    current = get_active_streamer()
+    if current.is_running:
+        current.stop()
+    _active_device_type = device_type
+
+
+# Backward compat: the old singleton
+streamer = _cyton_streamer
 
 
 def get_shared_stream_service():
-    return streamer
+    return get_active_streamer()

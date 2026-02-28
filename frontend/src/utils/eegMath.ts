@@ -1,17 +1,14 @@
 import type { ChannelRange } from "@/types/eeg";
-import {
-  ADS1299_MAX_UV,
-  NEAR_RAILED_THRESHOLD_PERCENT,
-  RAILED_THRESHOLD_PERCENT,
-} from "@/config/eeg";
 
 // OpenBCI Cyton uses 24-bit ADC with ±200mV = ±200,000 µV range
 // Railed = signal hits hardware limits (saturation)
-const RAIL_THRESHOLD_UV = ADS1299_MAX_UV;
-const THRESHOLD_WARN = NEAR_RAILED_THRESHOLD_PERCENT * 100;
-const THRESHOLD_RAILED = RAILED_THRESHOLD_PERCENT * 100;
 
-export const calculateChannelStats = (values: number[]): ChannelRange => {
+export const calculateChannelStats = (
+  values: number[],
+  maxUv: number,
+  railedThresholdPercent: number,
+  nearRailedThresholdPercent: number,
+): ChannelRange => {
   if (values.length === 0) {
     return {
       min: 0,
@@ -22,6 +19,10 @@ export const calculateChannelStats = (values: number[]): ChannelRange => {
       dcOffsetPercent: 0,
     };
   }
+
+  const RAIL_THRESHOLD_UV = maxUv;
+  const THRESHOLD_WARN = nearRailedThresholdPercent * 100;
+  const THRESHOLD_RAILED = railedThresholdPercent * 100;
 
   let min = values[0];
   let max = values[0];
