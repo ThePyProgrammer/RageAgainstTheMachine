@@ -1,31 +1,30 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { API_ENDPOINTS } from "@/config/api";
-import { CalibrationWizard } from "@/features/pong/components/CalibrationWizard";
-import { DebugOverlay } from "@/features/pong/components/DebugOverlay";
-import { GameCanvas } from "@/features/pong/components/GameCanvas";
-import { KeyboardHints } from "@/features/pong/components/KeyboardHints";
-import { MenuScreen } from "@/features/pong/components/MenuScreen";
-import { ScoreBoard } from "@/features/pong/components/ScoreBoard";
-import { SettingsOverlay } from "@/features/pong/components/SettingsOverlay";
-import { StressMeter } from "@/features/pong/components/StressMeter";
-import { TauntBubble } from "@/features/pong/components/TauntBubble";
-import type { LoopDebugPayload, OpponentLoopEventPayload } from "@/features/pong/game/gameLoop";
-import { usePongSettings } from "@/features/pong/state/usePongSettings";
-import { deriveScoreAccentColor, resolveUiColorToken } from "@/features/pong/types/pongSettings";
-import type { DebugStats, GameScreen, RuntimeState } from "@/features/pong/types/pongRuntime";
-import { useAIOpponent } from "@/hooks/useAIOpponent";
-import type { OpponentInputMode } from "@/hooks/useAIOpponent";
 import { EEGStreamModal } from "@/combat3d/ui/EEGStreamModal";
+import { CalibrationWizard } from "@/features/pong/components/CalibrationWizard";
+import { SettingsOverlay } from "@/features/pong/components/SettingsOverlay";
+import {
+  createInitialRuntimeState,
+  type LoopDebugPayload,
+} from "@/features/breakout/game/gameLoop";
+import { DebugOverlay } from "@/features/breakout/components/DebugOverlay";
+import { GameCanvas } from "@/features/breakout/components/GameCanvas";
+import { KeyboardHints } from "@/features/breakout/components/KeyboardHints";
+import { MenuScreen } from "@/features/breakout/components/MenuScreen";
+import { ScoreBoard } from "@/features/breakout/components/ScoreBoard";
+import { usePongSettings } from "@/features/pong/state/usePongSettings";
+import {
+  deriveScoreAccentColor,
+  resolveUiColorToken,
+} from "@/features/pong/types/pongSettings";
+import type {
+  DebugStats,
+  GameScreen,
+  RuntimeState,
+} from "@/features/breakout/types/breakoutRuntime";
 
 type CalibrationStep = "left" | "right" | "fine_tuning" | "complete" | "error";
-type BallControlMode = "paddle" | "ball";
 type PaddleCommand = "none" | "left" | "right";
-type ActiveTaunt = { text: string; timestamp: number };
-type SentOpponentEvent = {
-  sentAtMs: number;
-  event: OpponentLoopEventPayload["event"];
-  score: string;
-};
 type EegHemisphere = "left" | "right";
 
 interface EegPaneState {
@@ -40,22 +39,9 @@ interface EegPaneState {
 const LEFT_TRIAL_MS = 7000;
 const RIGHT_TRIAL_MS = 7000;
 const PROGRESS_TICK_MS = 120;
-const DEFAULT_STRESS_LEVEL = 0.24;
-const INITIAL_OPPONENT_DIFFICULTY = 0.5;
-const OPPONENT_DEBUG = import.meta.env.DEV;
-const EEG_WS_INTERVAL_MS = 120;
-const EEG_COMMAND_HOLD_MS = 900;
-const EEG_MIN_CONFIDENCE = 56;
-
-const createRuntimeState = (): RuntimeState => ({
-  width: 960,
-  height: 540,
-  ball: { x: 480, y: 270, radius: 10 },
-  topPaddle: { x: 425, y: 20, width: 110, height: 14 },
-  bottomPaddle: { x: 425, y: 506, width: 110, height: 14 },
-  playerScore: 0,
-  aiScore: 0,
-});
+const EEG_WAVE_POINTS = 42;
+const EEG_DEFAULT_TICK_MS = 120;
+const EEG_STREAM_STALE_MS = 1800;
 
 const INITIAL_DEBUG: DebugStats = {
   fps: 0,
@@ -70,6 +56,8 @@ const INITIAL_DEBUG: DebugStats = {
   collisionNormals: undefined,
   positionClampedPerSecond: undefined,
   collisionResolvedPerSecond: undefined,
+  bricksRemaining: undefined,
+  speedMultiplier: undefined,
 };
 
 const sleep = (ms: number) =>
@@ -79,8 +67,6 @@ const sleep = (ms: number) =>
 
 const clamp01 = (value: number): number => Math.max(0, Math.min(1, value));
 const clampSignal = (value: number): number => Math.max(-1, Math.min(1, value));
-const EEG_WAVE_POINTS= 42;
-const EEG_STREAM_STALE_MS = 1800;
 
 const createDefaultWave = (phase = 0): number[] =>
   Array.from(
@@ -167,13 +153,23 @@ async function ensureEegStreamRunning(): Promise<void> {
   }
 }
 
-export default function PongPage() {
+export default function BreakoutPage() {
   const { settings, updateSettings, resetSettings } = usePongSettings();
-  const { latestUpdate, latestFeedbackUpdate, sendGameEvent, playLatestAudio } = useAIOpponent();
+
+  const runtimeRef = useRef<RuntimeState>(createInitialRuntimeState());
+  const debugRef = useRef<DebugStats>(INITIAL_DEBUG);
+  const pausedRef = useRef(false);
+  const miSocketRef = useRef<WebSocket | null>(null);
+  const calibrationRunIdRef = useRef(0);
+  const eegLastPacketAtRef = useRef(0);
+  const eegPacketRateWindowRef = useRef({
+    windowStartMs: performance.now(),
+    packetCount: 0,
+    packetRateHz: 0,
+  });
+  const eegWavePhaseRef = useRef(0);
 
   const [screen, setScreen] = useState<GameScreen>("menu");
-  const [ballControlMode, setBallControlMode] = useState<BallControlMode>("paddle");
-  const [inputMode, setInputMode] = useState<OpponentInputMode>("keyboard_paddle");
   const [overlayOpen, setOverlayOpen] = useState(false);
   const [calibrationStep, setCalibrationStep] = useState<CalibrationStep>("left");
   const [calibrationInstruction, setCalibrationInstruction] = useState(
@@ -184,38 +180,15 @@ export default function PongPage() {
   const [calibrationError, setCalibrationError] = useState<string | undefined>(undefined);
   const [calibrationRunning, setCalibrationRunning] = useState(false);
   const [debug, setDebug] = useState<DebugStats>(INITIAL_DEBUG);
-  const [scores, setScores] = useState({ player: 0, ai: 0 });
+  const [hud, setHud] = useState(() => ({
+    score: runtimeRef.current.score,
+    lives: runtimeRef.current.lives,
+    level: runtimeRef.current.level,
+  }));
+  const [sessionToken, setSessionToken] = useState(0);
+  const [gameOver, setGameOver] = useState(runtimeRef.current.gameOver);
   const [eegCommand, setEegCommand] = useState<PaddleCommand>("none");
-  const [stressLevel, setStressLevel] = useState(DEFAULT_STRESS_LEVEL);
-  const [activeTaunt, setActiveTaunt] = useState<ActiveTaunt | null>(null);
   const [eegPane, setEegPane] = useState<EegPaneState>(() => createInitialEegPaneState());
-
-  const debugRef = useRef<DebugStats>(INITIAL_DEBUG);
-  const runtimeRef = useRef<RuntimeState>(createRuntimeState());
-  const pausedRef = useRef(false);
-  const miSocketRef = useRef<WebSocket | null>(null);
-  const eegHoldTimerRef = useRef<number | null>(null);
-  const eegCommandHoldUntilRef = useRef(0);
-  const calibrationRunIdRef = useRef(0);
-  const opponentDifficultyRef = useRef(INITIAL_OPPONENT_DIFFICULTY);
-  const opponentEventCounterRef = useRef(0);
-  const processedUpdateKeyRef = useRef<string | null>(null);
-  const processedFeedbackUpdateKeyRef = useRef<string | null>(null);
-  const sentOpponentEventsRef = useRef<Map<string, SentOpponentEvent>>(new Map());
-  const eegLastPacketAtRef = useRef(0);
-  const eegPacketRateWindowRef = useRef({
-    windowStartMs: performance.now(),
-    packetCount: 0,
-    packetRateHz: 0,
-  });
-  const eegWavePhaseRef = useRef(0);
-
-  const logOpponent = useCallback((label: string, payload: Record<string, unknown>) => {
-    if (!OPPONENT_DEBUG) {
-      return;
-    }
-    console.debug(`[pong-opponent] ${label}`, payload);
-  }, []);
 
   const publishDebug = useCallback((next: Partial<DebugStats>) => {
     debugRef.current = {
@@ -252,23 +225,10 @@ export default function PongPage() {
     setEegPane(createInitialEegPaneState());
   }, []);
 
-  const resetOpponentFeedback = useCallback(() => {
-    opponentDifficultyRef.current = INITIAL_OPPONENT_DIFFICULTY;
-    setStressLevel(DEFAULT_STRESS_LEVEL);
-    setActiveTaunt(null);
-    processedUpdateKeyRef.current = null;
-    processedFeedbackUpdateKeyRef.current = null;
-  }, []);
-
   const teardownMiSocket = useCallback(
     (sendStop: boolean) => {
       const ws = miSocketRef.current;
       miSocketRef.current = null;
-      if (eegHoldTimerRef.current !== null) {
-        window.clearTimeout(eegHoldTimerRef.current);
-        eegHoldTimerRef.current = null;
-      }
-      eegCommandHoldUntilRef.current = 0;
       if (ws && ws.readyState === WebSocket.OPEN && sendStop) {
         ws.send(JSON.stringify({ action: "stop" }));
       }
@@ -282,158 +242,29 @@ export default function PongPage() {
     [publishDebug, resetEegPane],
   );
 
-  const applyEegCommand = useCallback((command: PaddleCommand) => {
-    setEegCommand(command);
-    const holdUntil = performance.now() + EEG_COMMAND_HOLD_MS;
-    eegCommandHoldUntilRef.current = holdUntil;
-    if (eegHoldTimerRef.current !== null) {
-      window.clearTimeout(eegHoldTimerRef.current);
-    }
-    eegHoldTimerRef.current = window.setTimeout(() => {
-      if (performance.now() >= eegCommandHoldUntilRef.current) {
-        setEegCommand("none");
-      }
-      eegHoldTimerRef.current = null;
-    }, EEG_COMMAND_HOLD_MS + 40);
-  }, []);
-
   const resetRuntime = useCallback(() => {
-    Object.assign(runtimeRef.current, createRuntimeState());
+    Object.assign(runtimeRef.current, createInitialRuntimeState());
     debugRef.current = {
       ...INITIAL_DEBUG,
       thonkConnected: debugRef.current.thonkConnected,
       calibrationQuality: debugRef.current.calibrationQuality,
     };
     setDebug(debugRef.current);
-    setScores({ player: 0, ai: 0 });
+    setHud({
+      score: runtimeRef.current.score,
+      lives: runtimeRef.current.lives,
+      level: runtimeRef.current.level,
+    });
+    setGameOver(runtimeRef.current.gameOver);
+    setSessionToken((current) => current + 1);
   }, []);
 
-  useEffect(() => {
-    if (!latestUpdate) {
-      return;
-    }
-
-    const updateKey = `${latestUpdate.event_id}:${latestUpdate.timestamp_ms}`;
-    if (processedUpdateKeyRef.current === updateKey) {
-      return;
-    }
-    processedUpdateKeyRef.current = updateKey;
-
-    opponentDifficultyRef.current = latestUpdate.difficulty.final;
-    setStressLevel(latestUpdate.metrics.stress);
-
-    const sentMeta = sentOpponentEventsRef.current.get(latestUpdate.event_id);
-    const now = performance.now();
-    const rttMs = sentMeta ? now - sentMeta.sentAtMs : null;
-    sentOpponentEventsRef.current.delete(latestUpdate.event_id);
-
-    logOpponent("recv_update", {
-      eventId: latestUpdate.event_id,
-      event: sentMeta?.event ?? "unknown",
-      score: sentMeta?.score ?? "unknown",
-      provider: latestUpdate.meta.provider,
-      serverLatencyMs: latestUpdate.meta.latency_ms,
-      metricsAgeMs: latestUpdate.meta.metrics_age_ms,
-      clientRttMs: rttMs !== null ? Number(rttMs.toFixed(2)) : null,
-      tauntChars: latestUpdate.taunt_text.length,
-      audioBytesEstimate: latestUpdate.speech.audio_base64
-        ? Math.floor((latestUpdate.speech.audio_base64.length * 3) / 4)
-        : 0,
-    });
-  }, [latestUpdate, logOpponent]);
-
-  useEffect(() => {
-    if (!latestFeedbackUpdate) {
-      return;
-    }
-
-    const updateKey = `${latestFeedbackUpdate.event_id}:${latestFeedbackUpdate.timestamp_ms}`;
-    if (processedFeedbackUpdateKeyRef.current === updateKey) {
-      return;
-    }
-    processedFeedbackUpdateKeyRef.current = updateKey;
-
-    if (latestFeedbackUpdate.taunt_text.trim()) {
-      setActiveTaunt({
-        text: latestFeedbackUpdate.taunt_text,
-        timestamp: latestFeedbackUpdate.timestamp_ms,
-      });
-    }
-
-    if (!latestFeedbackUpdate.speech.audio_base64) {
-      logOpponent("audio_playback_skipped", {
-        eventId: latestFeedbackUpdate.event_id,
-        reason: "empty_audio_payload",
-      });
-      return;
-    }
-
-    void (async () => {
-      const played = await playLatestAudio(latestFeedbackUpdate.event_id);
-      logOpponent("audio_playback", {
-        eventId: latestFeedbackUpdate.event_id,
-        played,
-        provider: latestFeedbackUpdate.meta.provider,
-      });
-    })();
-  }, [latestFeedbackUpdate, logOpponent, playLatestAudio]);
-
-  const handleOpponentEvent = useCallback(
-    (payload: OpponentLoopEventPayload) => {
-      if (screen !== "game") {
-        return;
-      }
-
-      opponentEventCounterRef.current += 1;
-      const eventId = `pong-${Date.now()}-${opponentEventCounterRef.current}`;
-      const scoreText = `${payload.score.player}-${payload.score.ai}`;
-      sentOpponentEventsRef.current.set(eventId, {
-        sentAtMs: performance.now(),
-        event: payload.event,
-        score: scoreText,
-      });
-      if (sentOpponentEventsRef.current.size > 256) {
-        const oldestKey = sentOpponentEventsRef.current.keys().next().value;
-        if (oldestKey) {
-          sentOpponentEventsRef.current.delete(oldestKey);
-        }
-      }
-
-      logOpponent("send_event", {
-        eventId,
-        event: payload.event,
-        score: scoreText,
-        inputMode,
-        difficulty: Number(opponentDifficultyRef.current.toFixed(3)),
-        nearSide: payload.event_context?.near_side ?? null,
-        proximity: payload.event_context?.proximity ?? null,
-      });
-
-      sendGameEvent({
-        event_id: eventId,
-        game_mode: "pong",
-        input_mode: inputMode,
-        event: payload.event,
-        score: payload.score,
-        current_difficulty: opponentDifficultyRef.current,
-        event_context: payload.event_context,
-      });
-    },
-    [inputMode, logOpponent, screen, sendGameEvent],
-  );
-
-  const startKeyboard = useCallback(
-    (mode: BallControlMode) => {
-      teardownMiSocket(true);
-      resetRuntime();
-      resetOpponentFeedback();
-      pausedRef.current = false;
-      setBallControlMode(mode);
-      setInputMode(mode === "ball" ? "keyboard_ball" : "keyboard_paddle");
-      setScreen("game");
-    },
-    [resetOpponentFeedback, resetRuntime, teardownMiSocket],
-  );
+  const startKeyboard = useCallback(() => {
+    teardownMiSocket(true);
+    resetRuntime();
+    pausedRef.current = false;
+    setScreen("game");
+  }, [resetRuntime, teardownMiSocket]);
 
   const connectAndStartMiStreaming = useCallback(async () => {
     teardownMiSocket(false);
@@ -453,7 +284,7 @@ export default function PongPage() {
       }, 8000);
 
       ws.onopen = () => {
-        ws.send(JSON.stringify({ action: "start", interval_ms: EEG_WS_INTERVAL_MS, reset: true }));
+        ws.send(JSON.stringify({ action: "start", interval_ms: 1000, reset: true }));
       };
 
       ws.onmessage = (event) => {
@@ -485,20 +316,45 @@ export default function PongPage() {
         }
 
         if (payload.type === "prediction") {
-          const nextCommand = mapCommandToPaddle(payload.command);
-          const confidence = Number(payload.confidence ?? 0);
+          const command = mapCommandToPaddle(payload.command);
+          setEegCommand(command);
 
-          if (nextCommand !== "none") {
-            if (Number.isFinite(confidence) && confidence > 0 && confidence < EEG_MIN_CONFIDENCE) {
-              return;
-            }
-            applyEegCommand(nextCommand);
-            return;
+          const now = performance.now();
+          eegLastPacketAtRef.current = now;
+
+          const packetRateWindow = eegPacketRateWindowRef.current;
+          packetRateWindow.packetCount += 1;
+          const elapsed = now - packetRateWindow.windowStartMs;
+          if (elapsed >= 1000) {
+            packetRateWindow.packetRateHz = (packetRateWindow.packetCount * 1000) / elapsed;
+            packetRateWindow.packetCount = 0;
+            packetRateWindow.windowStartMs = now;
           }
 
-          if (performance.now() >= eegCommandHoldUntilRef.current) {
-            setEegCommand("none");
-          }
+          const rawConfidence = Number(payload.confidence ?? 0);
+          const confidence = Number.isFinite(rawConfidence)
+            ? clamp01(rawConfidence > 1 ? rawConfidence / 100 : rawConfidence)
+            : 0;
+          const activeHemisphere: EegHemisphere = command === "right" ? "right" : "left";
+          const leftPower = activeHemisphere === "left"
+            ? 0.56 + confidence * 0.36
+            : Math.max(0.12, 0.26 - confidence * 0.08);
+          const rightPower = activeHemisphere === "right"
+            ? 0.56 + confidence * 0.36
+            : Math.max(0.12, 0.26 - confidence * 0.08);
+          const direction = activeHemisphere === "right" ? 1 : -1;
+          const sample = clampSignal(
+            direction * (0.36 + confidence * 0.46)
+              + Math.sin(now / 95) * (0.15 + confidence * 0.32),
+          );
+
+          pushEegSample(sample, {
+            leftPower,
+            rightPower,
+            confidence,
+            packetRateHz: packetRateWindow.packetRateHz,
+            activeHemisphere,
+          });
         }
       };
 
@@ -521,7 +377,7 @@ export default function PongPage() {
         }
       };
     });
-  }, [publishDebug, teardownMiSocket]);
+  }, [publishDebug, pushEegSample, teardownMiSocket]);
 
   const waitWithProgress = useCallback(async (durationMs: number, start: number, end: number) => {
     const startedAt = performance.now();
@@ -538,7 +394,7 @@ export default function PongPage() {
 
   const runCalibrationRound = useCallback(
     async (runId: number) => {
-      const userId = `pong_${Date.now().toString(36)}`;
+      const userId = `breakout_${Date.now().toString(36)}`;
       let calibrationSessionOpen = false;
       let calibrationSessionDir: string | undefined;
       const isActive = () => calibrationRunIdRef.current === runId;
@@ -624,10 +480,7 @@ export default function PongPage() {
         }
 
         resetRuntime();
-        resetOpponentFeedback();
         pausedRef.current = false;
-        setBallControlMode("paddle");
-        setInputMode("eeg");
         setScreen("game");
         setCalibrationRunning(false);
       } catch (error) {
@@ -648,7 +501,7 @@ export default function PongPage() {
         }
       }
     },
-    [connectAndStartMiStreaming, publishDebug, resetOpponentFeedback, resetRuntime, teardownMiSocket, waitWithProgress],
+    [connectAndStartMiStreaming, publishDebug, resetRuntime, teardownMiSocket, waitWithProgress],
   );
 
   const startEEGCalibration = useCallback(() => {
@@ -663,30 +516,36 @@ export default function PongPage() {
     void runCalibrationRound(runId);
   }, [runCalibrationRound]);
 
-  const updateScoresFromRuntime = useCallback((state: RuntimeState) => {
-    setScores((previous) => {
-      if (previous.player === state.playerScore && previous.ai === state.aiScore) {
+  const updateHudFromRuntime = useCallback((state: RuntimeState) => {
+    setHud((previous) => {
+      if (
+        previous.score === state.score &&
+        previous.lives === state.lives &&
+        previous.level === state.level
+      ) {
         return previous;
       }
-      return { player: state.playerScore, ai: state.aiScore };
+      return {
+        score: state.score,
+        lives: state.lives,
+        level: state.level,
+      };
     });
+    setGameOver(state.gameOver);
   }, []);
+
+  const handleRestartGame = useCallback(() => {
+    resetRuntime();
+    pausedRef.current = false;
+    setScreen("game");
+  }, [resetRuntime]);
 
   const saveSettings = useCallback(
     (next: typeof settings) => {
       updateSettings(next);
     },
-    [settings, updateSettings],
+    [updateSettings],
   );
-
-  const expireTaunt = useCallback((timestamp: number) => {
-    setActiveTaunt((current) => {
-      if (!current || current.timestamp !== timestamp) {
-        return current;
-      }
-      return null;
-    });
-  }, []);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -704,7 +563,6 @@ export default function PongPage() {
           teardownMiSocket(true);
         }
         setScreen("menu");
-        setActiveTaunt(null);
         pausedRef.current = false;
         return;
       }
@@ -715,9 +573,12 @@ export default function PongPage() {
       }
 
       if (screen === "menu") {
-        if (key === "k") startKeyboard("paddle");
-        if (key === "b") startKeyboard("ball");
-        if (key === "e") startEEGCalibration();
+        if (key === "k") {
+          startKeyboard();
+        }
+        if (key === "e") {
+          startEEGCalibration();
+        }
         return;
       }
 
@@ -738,12 +599,24 @@ export default function PongPage() {
           setOverlayOpen(true);
           return;
         }
+        if (key === "r" && gameOver) {
+          handleRestartGame();
+        }
       }
     };
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [calibrationRunning, overlayOpen, screen, startEEGCalibration, startKeyboard, teardownMiSocket]);
+  }, [
+    calibrationRunning,
+    gameOver,
+    handleRestartGame,
+    overlayOpen,
+    screen,
+    startEEGCalibration,
+    startKeyboard,
+    teardownMiSocket,
+  ]);
 
   useEffect(() => {
     if (screen !== "game" && screen !== "paused") {
@@ -777,7 +650,7 @@ export default function PongPage() {
         packetRateHz: 0,
         activeHemisphere: "left",
       });
-    }, 120);
+    }, EEG_DEFAULT_TICK_MS);
 
     return () => window.clearInterval(interval);
   }, [pushEegSample, screen]);
@@ -814,6 +687,8 @@ export default function PongPage() {
         collisionNormals: payload.collisionNormals,
         collisionResolvedPerSecond: payload.collisionResolvedPerSecond,
         positionClampedPerSecond: payload.positionClampedPerSecond,
+        bricksRemaining: payload.bricksRemaining,
+        speedMultiplier: payload.speedMultiplier,
       });
     },
     [publishDebug],
@@ -824,8 +699,7 @@ export default function PongPage() {
       {screen === "menu" && (
         <MenuScreen
           hasSavedCalibration={false}
-          onStartKeyboard={() => startKeyboard("paddle")}
-          onStartBallMode={() => startKeyboard("ball")}
+          onStartKeyboard={startKeyboard}
           onStartEEG={startEEGCalibration}
           onStartWithSavedCalibration={startEEGCalibration}
           onCustomize={() => setOverlayOpen(true)}
@@ -848,23 +722,21 @@ export default function PongPage() {
       {(screen === "game" || screen === "paused") && (
         <section className="relative w-full h-full">
           <GameCanvas
+            key={sessionToken}
             runtimeState={runtimeRef.current}
             settings={settings}
             onFps={handleFps}
             onDebugMetrics={handleDebugMetrics}
-            onRuntimeUpdate={updateScoresFromRuntime}
-            onOpponentEvent={handleOpponentEvent}
+            onRuntimeUpdate={updateHudFromRuntime}
             isPausedRef={pausedRef}
-            controlMode={ballControlMode}
-            eegCommand={ballControlMode === "paddle" ? eegCommand : "none"}
-            difficultyRef={opponentDifficultyRef}
+            eegCommand={eegCommand}
           />
           <ScoreBoard
-            playerScore={scores.player}
-            aiScore={scores.ai}
+            score={hud.score}
+            lives={hud.lives}
+            level={hud.level}
             accentColor={scoreboardAccent}
           />
-          <StressMeter stressLevel={stressLevel} />
           <EEGStreamModal
             waveSamples={eegPane.waveSamples}
             leftPower={eegPane.leftPower}
@@ -874,17 +746,19 @@ export default function PongPage() {
             activeHemisphere={eegPane.activeHemisphere}
             mode="classifier"
           />
-          {activeTaunt && (
-            <TauntBubble
-              text={activeTaunt.text}
-              durationMs={3000}
-              timestamp={activeTaunt.timestamp}
-              onExpire={() => expireTaunt(activeTaunt.timestamp)}
-            />
+          {gameOver && (
+            <div className="absolute inset-0 z-30 flex items-center justify-center pointer-events-none">
+              <div className="rounded border border-red-400/60 bg-black/80 px-6 py-5 text-center shadow-[0_0_20px_rgba(248,113,113,0.35)]">
+                <p className="text-xl font-semibold text-red-300">Game Over</p>
+                <p className="mt-2 text-sm text-zinc-300">
+                  Press R to restart or Esc to return to menu.
+                </p>
+              </div>
+            </div>
           )}
           <DebugOverlay {...debug} />
           <KeyboardHints mode="game" />
-          <div className="absolute top-2 right-2 z-40 flex items-center gap-1">
+          <div className="absolute top-2 right-2 z-40 flex items-center gap-2">
             <button
               type="button"
               onClick={() => {
@@ -892,11 +766,10 @@ export default function PongPage() {
                 setScreen("menu");
                 pausedRef.current = false;
               }}
-              style={{ fontSize: 18 }}
-              className="rounded px-2 py-0.5 text-white/60 hover:text-white bg-black/50 hover:bg-black/80 border border-white/20 leading-none"
+              className="rounded px-2 py-1 text-xs text-white/70 hover:text-white bg-black/50 hover:bg-black/80 border border-white/20 leading-none"
               title="Quit to menu (Esc)"
             >
-              ✕
+              Quit
             </button>
             <button
               type="button"
@@ -904,11 +777,10 @@ export default function PongPage() {
                 pausedRef.current = !pausedRef.current;
                 setScreen(pausedRef.current ? "paused" : "game");
               }}
-              style={{ fontSize: 18 }}
-              className="rounded px-2 py-0.5 text-white/60 hover:text-white bg-black/50 hover:bg-black/80 border border-white/20 leading-none"
+              className="rounded px-2 py-1 text-xs text-white/70 hover:text-white bg-black/50 hover:bg-black/80 border border-white/20 leading-none"
               title={screen === "paused" ? "Resume (P)" : "Pause (P)"}
             >
-              {screen === "paused" ? "▶" : "⏸"}
+              {screen === "paused" ? "Resume" : "Pause"}
             </button>
           </div>
         </section>
