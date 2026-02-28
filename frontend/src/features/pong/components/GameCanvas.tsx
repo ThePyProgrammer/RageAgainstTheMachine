@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { createPongLoop } from "@/features/pong/game/gameLoop";
-import type { LoopDebugPayload } from "@/features/pong/game/gameLoop";
+import type { LoopDebugPayload, OpponentLoopEventPayload } from "@/features/pong/game/gameLoop";
 import type { RuntimeState, GameInputState } from "@/features/pong/types/pongRuntime";
 import type { UiSettings } from "@/features/pong/types/pongSettings";
 
@@ -9,9 +9,12 @@ type GameCanvasProps = {
   settings: UiSettings;
   onFps: (fps: number) => void;
   onRuntimeUpdate?: (state: RuntimeState) => void;
+  onOpponentEvent?: (event: OpponentLoopEventPayload) => void;
   onDebugMetrics?: (payload: LoopDebugPayload) => void;
   isPausedRef?: { current: boolean };
   controlMode?: "paddle" | "ball";
+  eegCommand?: "none" | "left" | "right";
+  difficultyRef?: { current: number };
 };
 
 export const GameCanvas = ({
@@ -19,9 +22,12 @@ export const GameCanvas = ({
   settings,
   onFps,
   onRuntimeUpdate,
+  onOpponentEvent,
   onDebugMetrics,
   isPausedRef,
   controlMode = "paddle",
+  eegCommand = "none",
+  difficultyRef,
 }: GameCanvasProps) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const ctxRef = useRef<CanvasRenderingContext2D | null>(null);
@@ -29,8 +35,10 @@ export const GameCanvas = ({
   const settingsRef = useRef(settings);
   const onFpsRef = useRef(onFps);
   const onRuntimeUpdateRef = useRef(onRuntimeUpdate);
+  const onOpponentEventRef = useRef(onOpponentEvent);
   const onDebugMetricsRef = useRef(onDebugMetrics);
   const controlModeRef = useRef(controlMode);
+  const eegCommandRef = useRef<"none" | "left" | "right">(eegCommand);
   const inputRef = useRef<GameInputState>({
     up: false,
     down: false,
@@ -55,6 +63,10 @@ export const GameCanvas = ({
   useEffect(() => {
     onRuntimeUpdateRef.current = onRuntimeUpdate;
   }, [onRuntimeUpdate]);
+
+  useEffect(() => {
+    onOpponentEventRef.current = onOpponentEvent;
+  }, [onOpponentEvent]);
 
   useEffect(() => {
     onDebugMetricsRef.current = onDebugMetrics;
@@ -103,6 +115,10 @@ export const GameCanvas = ({
   useEffect(() => {
     controlModeRef.current = controlMode;
   }, [controlMode]);
+
+  useEffect(() => {
+    eegCommandRef.current = eegCommand;
+  }, [eegCommand]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -165,17 +181,16 @@ export const GameCanvas = ({
       inputRef,
       onFps: (value) => onFpsRef.current?.(value),
       onRuntimeUpdate: (value) => onRuntimeUpdateRef.current?.(value),
+      onOpponentEvent: (value) => onOpponentEventRef.current?.(value),
       onDebugMetrics: (value) => onDebugMetricsRef.current?.(value),
       isPausedRef,
       controlModeRef,
+      eegCommandRef,
+      difficultyRef,
     });
 
     return stop;
-  }, [
-    isPausedRef,
-    runtimeState.width,
-    runtimeState.height,
-  ]);
+  }, [difficultyRef, isPausedRef, runtimeState.width, runtimeState.height]);
 
   return (
     <div className="w-full h-full">

@@ -33,8 +33,8 @@ export const PatternPreview = ({ settings }: PatternPreviewProps) => {
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, size, size);
 
-      const bg = resolveUiColorToken("grayscale");
-      ctx.fillStyle = bg;
+      // High-contrast dark background
+      ctx.fillStyle = "#050508";
       ctx.fillRect(0, 0, size, size);
 
       const pattern = getCachedPattern(ctx, {
@@ -44,36 +44,50 @@ export const PatternPreview = ({ settings }: PatternPreviewProps) => {
         secondaryToken: settings.avatar.secondaryColorToken,
       });
 
-      const centerW = size * 0.45;
-      const centerH = size * 0.45;
+      const centerW = size * 0.5;
+      const centerH = size * 0.5;
       const x = (size - centerW) / 2;
       const y = (size - centerH) / 2;
+
+      // Draw shape with glow for contrast
+      const lineColor = resolveUiColorToken(settings.theme.lineColor);
+      ctx.save();
+      ctx.shadowColor = lineColor;
+      ctx.shadowBlur = 8 * settings.theme.glowIntensity;
+
       ctx.fillStyle = pattern;
-      ctx.strokeStyle = resolveUiColorToken(settings.theme.lineColor);
-      ctx.lineWidth = 1;
+      ctx.strokeStyle = lineColor;
+      ctx.lineWidth = 1.5;
       drawShapePath(ctx, shape, x, y, centerW, centerH);
       ctx.fill();
       ctx.stroke();
+      ctx.restore();
     };
 
     render(leftCanvasRef.current, settings.avatar.paddleShape, 90);
-    render(ballCanvasRef.current, settings.avatar.ballShape, 60);
+    render(ballCanvasRef.current, settings.avatar.ballShape, 68);
     render(lineCanvasRef.current, "square", 70);
   }, [settings]);
 
   return (
     <div className="grid gap-4 sm:grid-cols-3">
-      <div className="rounded border border-zinc-700 p-2">
-        <p className="text-xs text-zinc-400 mb-2">Paddle fill</p>
-        <canvas ref={leftCanvasRef} />
+      <div className="rounded-xl border border-white/10 bg-black/40 p-3 text-center">
+        <p className="text-[10px] uppercase tracking-wider text-white/40 mb-2">
+          Paddle fill
+        </p>
+        <canvas ref={leftCanvasRef} className="mx-auto rounded-lg" />
       </div>
-      <div className="rounded border border-zinc-700 p-2">
-        <p className="text-xs text-zinc-400 mb-2">Ball fill</p>
-        <canvas ref={ballCanvasRef} />
+      <div className="rounded-xl border border-white/10 bg-black/40 p-3 text-center">
+        <p className="text-[10px] uppercase tracking-wider text-white/40 mb-2">
+          Ball fill
+        </p>
+        <canvas ref={ballCanvasRef} className="mx-auto rounded-lg" />
       </div>
-      <div className="rounded border border-zinc-700 p-2">
-        <p className="text-xs text-zinc-400 mb-2">Line sample</p>
-        <canvas ref={lineCanvasRef} />
+      <div className="rounded-xl border border-white/10 bg-black/40 p-3 text-center">
+        <p className="text-[10px] uppercase tracking-wider text-white/40 mb-2">
+          Line sample
+        </p>
+        <canvas ref={lineCanvasRef} className="mx-auto rounded-lg" />
       </div>
     </div>
   );

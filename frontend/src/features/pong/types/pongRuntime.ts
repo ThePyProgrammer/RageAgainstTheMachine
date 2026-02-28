@@ -38,8 +38,8 @@ export interface RuntimeState {
   width: number;
   height: number;
   ball: RuntimeBall;
-  leftPaddle: RuntimePaddle;
-  rightPaddle: RuntimePaddle;
+  topPaddle: RuntimePaddle;     // Player paddle at top
+  bottomPaddle: RuntimePaddle;  // AI paddle at bottom
   playerScore: number;
   aiScore: number;
 }

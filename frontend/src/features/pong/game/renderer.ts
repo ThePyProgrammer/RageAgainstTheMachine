@@ -14,11 +14,11 @@ const buildBoundaryGradient = (ctx: CanvasRenderingContext2D) => {
   return gradient;
 };
 
-const drawCenteredDashedLine = (
+const drawHorizontalDashedLine = (
   ctx: CanvasRenderingContext2D,
-  x: number,
-  y1: number,
-  y2: number,
+  x1: number,
+  x2: number,
+  y: number,
   color: string,
 ) => {
   ctx.save();
@@ -26,22 +26,23 @@ const drawCenteredDashedLine = (
   ctx.lineWidth = 2;
   ctx.setLineDash([8, 10]);
   ctx.beginPath();
-  ctx.moveTo(x, y1);
-  ctx.lineTo(x, y2);
+  ctx.moveTo(x1, y);
+  ctx.lineTo(x2, y);
   ctx.stroke();
   ctx.restore();
 };
 
-const drawBoundary = (ctx: CanvasRenderingContext2D, color: string, width: number) => {
+const drawBoundary = (ctx: CanvasRenderingContext2D, color: string, height: number) => {
   ctx.save();
   ctx.strokeStyle = color;
   ctx.globalAlpha = 0.6;
   ctx.lineWidth = 2;
   ctx.beginPath();
+  // Draw left and right boundaries (ball bounces off these walls)
   ctx.moveTo(0, 0);
-  ctx.lineTo(width, 0);
-  ctx.moveTo(0, ctx.canvas.height);
-  ctx.lineTo(width, ctx.canvas.height);
+  ctx.lineTo(0, height);
+  ctx.moveTo(ctx.canvas.width, 0);
+  ctx.lineTo(ctx.canvas.width, height);
   ctx.stroke();
   ctx.restore();
 };
@@ -51,7 +52,7 @@ export const renderFrame = (
   runtimeState: RuntimeState,
   settings: UiSettings,
 ) => {
-  const { width, height, ball, leftPaddle, rightPaddle } = runtimeState;
+  const { width, height, ball, topPaddle, bottomPaddle } = runtimeState;
   const palette = resolveUiColorToken(settings.theme.palette);
   const lineColor = resolveUiColorToken(settings.theme.lineColor);
   const scoreAccent = resolveUiColorToken(
@@ -66,8 +67,8 @@ export const renderFrame = (
 
   ctx.shadowColor = lineColor;
   ctx.shadowBlur = 12 * glow;
-  drawBoundary(ctx, palette, width);
-  drawCenteredDashedLine(ctx, width / 2, 0, height, lineColor);
+  drawBoundary(ctx, palette, height);
+  drawHorizontalDashedLine(ctx, 0, width, height / 2, lineColor);
   ctx.restore();
 
   const primary = resolveUiColorToken(settings.avatar.primaryColorToken);
@@ -105,18 +106,18 @@ export const renderFrame = (
 
   paintShape(
     settings.avatar.paddleShape,
-    leftPaddle.x,
-    leftPaddle.y,
-    leftPaddle.width,
-    leftPaddle.height,
+    topPaddle.x,
+    topPaddle.y,
+    topPaddle.width,
+    topPaddle.height,
     lineColor,
   );
   paintShape(
     settings.avatar.paddleShape,
-    rightPaddle.x,
-    rightPaddle.y,
-    rightPaddle.width,
-    rightPaddle.height,
+    bottomPaddle.x,
+    bottomPaddle.y,
+    bottomPaddle.width,
+    bottomPaddle.height,
     lineColor,
   );
 

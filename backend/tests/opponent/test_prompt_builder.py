@@ -14,7 +14,8 @@ def test_system_prompt_contains_constraints() -> None:
     prompt = build_system_prompt(max_taunt_chars=80)
     assert "playful" in prompt.lower()
     assert "no harassment" in prompt.lower()
-    assert "<= 80" in prompt
+    assert "under 80 characters" in prompt.lower()
+    assert "default to gradual pressure increases" in prompt.lower()
 
 
 def test_user_prompt_contains_event_and_metrics() -> None:
@@ -31,6 +32,6 @@ def test_user_prompt_contains_event_and_metrics() -> None:
     metrics = MetricsSnapshot(stress=0.64, frustration=0.58, focus=0.42, alertness=0.73)
 
     prompt = build_user_prompt(event=event, metrics=metrics, prior_difficulty=0.82)
-    assert "near_score" in prompt
-    assert "stress: 0.640" in prompt
-    assert "suggested_prior_difficulty: 0.820" in prompt
+    assert "event type: near_score" in prompt.lower()
+    assert "standout signal" in prompt.lower()
+    assert "prior suggested difficulty: 0.820" in prompt.lower()

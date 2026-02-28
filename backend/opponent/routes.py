@@ -16,6 +16,8 @@ from opponent.models import (
     OpponentUpdate,
     SpeechPayload,
     DifficultyPayload,
+    GameEventType,
+    InputMode,
 )
 from opponent.services.difficulty_service import (
     MetricsSnapshot,
@@ -30,6 +32,7 @@ from opponent.services.prompt_builder import (
     build_system_prompt,
     build_user_prompt,
 )
+from opponent.services.synthetic_metrics_service import SyntheticMetricsService
 from opponent.services.session_service import OpponentSessionService
 from shared.config.app_config import (
     OPENAI_API_KEY,
@@ -86,11 +89,10 @@ async def opponent_websocket(websocket: WebSocket):
     """Bidirectional websocket for opponent event processing."""
     await websocket.accept()
     session = session_service.create_session()
+    synthetic_metrics_service = SyntheticMetricsService()
 
     try:
         while True:
-            start_mono = time.monotonic()
-
             try:
                 incoming = await websocket.receive_json()
                 event = OpponentGameEvent.model_validate(incoming)
@@ -113,17 +115,28 @@ async def opponent_websocket(websocket: WebSocket):
                 )
                 continue
 
-            metrics, metrics_age_ms = _get_metrics_snapshot()
-            if metrics is None:
-                metrics = DEFAULT_METRICS
-                metrics_age_ms = -1
-                await websocket.send_json(
-                    OpponentError(
-                        code="METRICS_UNAVAILABLE",
-                        message="Using fallback metrics because live command-centre data is unavailable.",
-                        recoverable=True,
-                    ).model_dump()
+            # Measure server processing latency from parsed event to emitted update.
+            start_mono = time.monotonic()
+
+            if _should_use_synthetic_metrics(event):
+                metrics = synthetic_metrics_service.next_metrics(
+                    event=event.event,
+                    score=event.score,
+                    event_context=event.event_context,
                 )
+                metrics_age_ms = 0
+            else:
+                metrics, metrics_age_ms = _get_metrics_snapshot()
+                if metrics is None:
+                    metrics = DEFAULT_METRICS
+                    metrics_age_ms = -1
+                    await websocket.send_json(
+                        OpponentError(
+                            code="METRICS_UNAVAILABLE",
+                            message="Using fallback metrics because live command-centre data is unavailable.",
+                            recoverable=True,
+                        ).model_dump()
+                    )
 
             previous = clamp01(event.current_difficulty)
             session.current_difficulty = previous
@@ -137,30 +150,53 @@ async def opponent_websocket(websocket: WebSocket):
             taunt_text = ""
             audio_base64 = ""
             provider = "rule_based"
+            generation_debug = {
+                "path": "skipped_non_score_event",
+                "text_ms": 0,
+                "tts_ms": 0,
+                "reason": "",
+            }
+            should_generate_taunt = event.event in (GameEventType.PLAYER_SCORE, GameEventType.AI_SCORE)
 
-            if session.can_emit_taunt(OPPONENT_MIN_TAUNT_INTERVAL_MS):
-                provider, taunt_text, model_target, audio_base64 = await _generate_response_bundle(
-                    websocket=websocket,
-                    event=event,
-                    metrics=metrics,
-                    prior=prior,
-                )
-                if taunt_text:
-                    session.mark_taunt_emitted()
-            else:
-                model_target = prior
-                await websocket.send_json(
-                    OpponentError(
-                        code="RATE_LIMIT",
-                        message="Taunt generation rate-limited; difficulty update still applied.",
-                        recoverable=True,
-                    ).model_dump()
-                )
+            if should_generate_taunt:
+                if session.can_emit_taunt(OPPONENT_MIN_TAUNT_INTERVAL_MS):
+                    (
+                        provider,
+                        taunt_text,
+                        model_target,
+                        audio_base64,
+                        generation_debug,
+                    ) = await _generate_response_bundle(
+                        websocket=websocket,
+                        event=event,
+                        metrics=metrics,
+                        prior=prior,
+                    )
+                    if taunt_text:
+                        session.mark_taunt_emitted()
+                else:
+                    model_target = prior
+                    generation_debug = {
+                        "path": "rate_limited",
+                        "text_ms": 0,
+                        "tts_ms": 0,
+                        "reason": "min_taunt_interval",
+                    }
+                    await websocket.send_json(
+                        OpponentError(
+                            code="RATE_LIMIT",
+                            message="Taunt generation rate-limited; difficulty update still applied.",
+                            recoverable=True,
+                        ).model_dump()
+                    )
 
             final_difficulty = apply_difficulty_control(
                 previous=previous,
                 prior=prior,
                 model_target=clamp01(model_target),
+                event=event.event,
+                score=event.score,
+                event_context=event.event_context,
             )
             session.current_difficulty = final_difficulty
 
@@ -188,6 +224,28 @@ async def opponent_websocket(websocket: WebSocket):
             )
             await websocket.send_json(update.model_dump())
 
+            processing_latency_ms = max(0, int((time.monotonic() - start_mono) * 1000.0))
+            logger.info(
+                (
+                    "opponent_event event_id=%s event=%s input_mode=%s score=%d-%d provider=%s "
+                    "latency_ms=%d metrics_age_ms=%d text_ms=%s tts_ms=%s taunt_chars=%d audio_bytes=%d path=%s reason=%s"
+                ),
+                event.event_id,
+                event.event.value,
+                event.input_mode.value if event.input_mode else "unspecified",
+                event.score.player,
+                event.score.ai,
+                provider,
+                processing_latency_ms,
+                metrics_age_ms,
+                generation_debug.get("text_ms", 0),
+                generation_debug.get("tts_ms", 0),
+                len(taunt_text),
+                _audio_bytes_estimate(audio_base64),
+                generation_debug.get("path", ""),
+                generation_debug.get("reason", ""),
+            )
+
     except WebSocketDisconnect as exc:
         logger.info("Opponent websocket disconnected: code=%s", exc.code)
     except Exception:
@@ -214,25 +272,34 @@ async def _generate_response_bundle(
     event: OpponentGameEvent,
     metrics: MetricsSnapshot,
     prior: float,
-) -> tuple[str, str, float, str]:
+) -> tuple[str, str, float, str, dict[str, int | str]]:
     """Generate taunt/difficulty/audio bundle, falling back when needed."""
     provider = "rule_based"
     taunt_text = fallback_service.generate_taunt(event=event, metrics=metrics)
     model_target = prior
     audio_base64 = ""
+    debug = {
+        "path": "rule_based",
+        "text_ms": 0,
+        "tts_ms": 0,
+        "reason": "",
+    }
 
     if not openai_service.is_available():
-        return provider, taunt_text, model_target, audio_base64
+        debug["reason"] = "openai_unavailable"
+        return provider, taunt_text, model_target, audio_base64, debug
 
     system_prompt = build_system_prompt(max_taunt_chars=OPPONENT_MAX_TAUNT_CHARS)
     user_prompt = build_user_prompt(event=event, metrics=metrics, prior_difficulty=prior)
 
     try:
+        text_start = time.monotonic()
         llm_output = openai_service.generate_structured_output(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             max_taunt_chars=OPPONENT_MAX_TAUNT_CHARS,
         )
+        debug["text_ms"] = max(0, int((time.monotonic() - text_start) * 1000.0))
         taunt_text = _clean_taunt_text(
             llm_output.taunt_text,
             max_chars=OPPONENT_MAX_TAUNT_CHARS,
@@ -244,8 +311,10 @@ async def _generate_response_bundle(
             )
         model_target = llm_output.difficulty_target
         provider = "responses_speech"
+        debug["path"] = "responses_speech"
     except Exception as exc:
         logger.error("OpenAI structured generation failed: %s", exc, exc_info=True)
+        debug["reason"] = "text_generation_error"
         await websocket.send_json(
             OpponentError(
                 code="OPENAI_ERROR",
@@ -253,15 +322,18 @@ async def _generate_response_bundle(
                 recoverable=True,
             ).model_dump()
         )
-        return provider, taunt_text, model_target, audio_base64
+        return provider, taunt_text, model_target, audio_base64, debug
 
     try:
+        tts_start = time.monotonic()
         audio_base64 = openai_service.generate_speech_base64(
             taunt_text,
             instructions=_build_dynamic_tts_instructions(metrics=metrics),
         )
+        debug["tts_ms"] = max(0, int((time.monotonic() - tts_start) * 1000.0))
     except Exception as exc:
         logger.error("OpenAI speech generation failed: %s", exc, exc_info=True)
+        debug["reason"] = "speech_generation_error"
         await websocket.send_json(
             OpponentError(
                 code="OPENAI_ERROR",
@@ -270,7 +342,7 @@ async def _generate_response_bundle(
             ).model_dump()
         )
 
-    return provider, taunt_text, model_target, audio_base64
+    return provider, taunt_text, model_target, audio_base64, debug
 
 
 def _get_metrics_snapshot() -> tuple[MetricsSnapshot | None, int]:
@@ -311,6 +383,19 @@ def _safe_signal_value(raw_value: object, default: float) -> float:
         return clamp01(float(raw_value))
     except Exception:
         return default
+
+
+def _should_use_synthetic_metrics(event: OpponentGameEvent) -> bool:
+    return event.input_mode in (
+        InputMode.KEYBOARD_PADDLE,
+        InputMode.KEYBOARD_BALL,
+    )
+
+
+def _audio_bytes_estimate(audio_base64: str) -> int:
+    if not audio_base64:
+        return 0
+    return int((len(audio_base64) * 3) / 4)
 
 
 def _build_dynamic_tts_instructions(metrics: MetricsSnapshot) -> str:

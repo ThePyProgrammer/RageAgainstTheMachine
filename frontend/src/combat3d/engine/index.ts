@@ -1,6 +1,7 @@
 import { SeededRNG } from "./seededRng";
 import type { CombatState, InputSample, SimulationConfig } from "./types";
 import { advanceSimulation } from "./physics";
+import type { Barrier, BarrierBreakEvent } from "./barriers";
 
 export const FRAME_MS = 1000 / 60;
 
@@ -9,16 +10,18 @@ export interface SimulationFrameArgs {
   readonly playerInput: InputSample;
   readonly enemyInput: InputSample;
   readonly dtMs: number;
+  readonly barriers?: Barrier[];
 }
 
 export interface DeterministicStepResult {
   readonly state: CombatState;
   readonly nextTickTimeMs: number;
+  readonly newBreakEvents: BarrierBreakEvent[];
 }
 
 export const createStateFromSeed = (seed: number): CombatState => {
   const rng = new SeededRNG(seed);
-  const state = {
+  const state: CombatState = {
     tick: 0,
     simTimeMs: 0,
     player: {
@@ -29,6 +32,12 @@ export const createStateFromSeed = (seed: number): CombatState => {
       vy: 0,
       cooldownMs: 0,
       speedBoostMs: 0,
+      hp: 5,
+      maxHp: 5,
+      ammo: 15,
+      maxAmmo: 15,
+      reloadMs: 0,
+      cumulativeYaw: 0,
     },
     enemy: {
       x: 20,
@@ -38,6 +47,12 @@ export const createStateFromSeed = (seed: number): CombatState => {
       vy: 0,
       cooldownMs: 0,
       speedBoostMs: 0,
+      hp: 5,
+      maxHp: 5,
+      ammo: 999,
+      maxAmmo: 999,
+      reloadMs: 0,
+      cumulativeYaw: 0,
     },
     projectiles: [],
     score: {
@@ -49,6 +64,9 @@ export const createStateFromSeed = (seed: number): CombatState => {
       aggression: rng.nextFloat() * 0.4,
       reactionMs: 220,
     },
+    lastObstacleSpawnMs: 0,
+    nextDynamicObstacleId: 1000,
+    dynamicObstacles: [],
   };
 
   return state;
@@ -72,13 +90,15 @@ export const stepSimulation = (
   const playerInput = args.playerInput;
   const enemyInput = args.enemyInput;
 
-  const nextState = advanceSimulation(
+  const advanceResult = advanceSimulation(
     state,
     playerInput,
     enemyInput,
     args.config,
     dt,
+    args.barriers,
   );
+  const nextState = advanceResult.state;
 
   const randomShift = rng.nextSignedRange() * 0.001;
   const nextDifficulty = {
@@ -92,5 +112,6 @@ export const stepSimulation = (
       difficulty: nextDifficulty,
     },
     nextTickTimeMs: state.simTimeMs + args.dtMs,
+    newBreakEvents: advanceResult.newBreakEvents,
   };
 };

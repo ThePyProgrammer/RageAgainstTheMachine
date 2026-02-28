@@ -33,7 +33,7 @@ class MICalibrationDataset:
             min_quality_percent: Filter out trials below this quality
 
         Returns:
-            (X, y) where X is (n_trials, n_channels, n_samples)
+            (X, y) where X is (n_epochs, n_channels, n_samples)
         """
         X_list = []
         y_list = []
@@ -55,8 +55,12 @@ class MICalibrationDataset:
                     self.session_dir / f"trial_{trial_info['trial_id']:03d}.npy"
                 )
                 if trial_file.exists():
-                    X_list.append(np.load(trial_file))
-                    y_list.append(trial_info["label"])
+                    trial_array = np.load(trial_file)
+                    if trial_array.ndim == 2:
+                        trial_array = trial_array[np.newaxis, ...]
+                    for epoch in trial_array:
+                        X_list.append(epoch)
+                        y_list.append(trial_info["label"])
 
         if not X_list:
             return np.array([]), np.array([])

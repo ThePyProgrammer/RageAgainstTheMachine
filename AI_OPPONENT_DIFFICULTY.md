@@ -14,9 +14,16 @@ Adaptive AI opponent difficulty derived from game state + backend command-centre
   - `event`: `player_score | ai_score | near_score`
   - `score.player`, `score.ai`
   - `current_difficulty` in `[0, 1]`
+  - optional `input_mode`: `eeg | keyboard_paddle | keyboard_ball`
   - optional near-score context
 - Backend metrics snapshot:
   - `stress`, `frustration`, `focus`, `alertness` in `[0, 1]`
+
+## Metric Source Selection
+
+- `input_mode = eeg` (or omitted): use live command-centre metrics from backend EEG streamer.
+- `input_mode = keyboard_paddle | keyboard_ball`: use session-scoped synthetic metrics.
+- Synthetic metrics are generated as a bounded random walk with event/score bias and always clamped to `[0, 1]`.
 
 ## Stress-Dominant Prior
 
@@ -48,7 +55,10 @@ Backend applies bounded control:
 ```text
 model_clamped = clamp(prior - 0.20, prior + 0.20, model_target)
 target = 0.70 * model_clamped + 0.30 * prior
-final = previous + clamp(target - previous, -0.08, +0.08)
+max_up = +0.05 by default
+max_up = +0.08 if gameplay evidence supports it
+  evidence := player scored OR player is tied/ahead OR near-score at AI goal
+final = previous + clamp(target - previous, -0.10, max_up)
 final = clamp01(final)
 ```
 

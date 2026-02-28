@@ -8,6 +8,9 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"]
-    }
+    },
+    "module": "node16",
+    "moduleResolution": "node16",
+    "types": ["node"]
+   }
   }
-}

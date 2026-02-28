@@ -58,6 +58,10 @@ class MuseStreamer:
         self.mi_processor = None
         self.enable_mi = False
 
+        # Calibration processor
+        self.calibration_processor = None
+        self.enable_calibration = False
+
         # Device specs
         self.n_eeg = DEVICE_CFG["eeg_channel_count"]
         self.n_aux = DEVICE_CFG["aux_channel_count"]
@@ -227,6 +231,8 @@ class MuseStreamer:
                     self.embedding_processor.add_samples(filtered_chunk)
                 if self.enable_mi and self.mi_processor:
                     self.mi_processor.add_samples(filtered_chunk)
+                if self.enable_calibration and self.calibration_processor:
+                    self.calibration_processor.add_samples(filtered_chunk)
 
                 # Build CSV rows (raw only)
                 rows = []
