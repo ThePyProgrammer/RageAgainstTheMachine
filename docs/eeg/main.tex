@@ -52,7 +52,7 @@ Comprehensive Consolidation of LaBraM Probing/Fine-Tuning/Curriculum and EEGNet 
 \newcommand{\ceTwo}{\ensuremath{\log 2 \approx 0.6931}}
 
 \begin{abstract}
-This manuscript consolidates the full EEG motor-imagery (MI) research trail implemented in \texttt{ml/}, including script code and notebook experiments (\texttt{ml/labram-for-eegmmidb.ipynb}). We systematize two modeling tracks: (i) LaBraM transfer experiments with probing, partial/full fine-tuning, and two-stage curriculum training; and (ii) EEGNet/EEGNetResidual compact baselines with subsequent user-level Muse calibration tuning. The cross-subject PhysioNet split used subjects 1--40 for training and 41--50 for validation, with runs [4, 8, 12]. Consolidated evidence shows persistent class-collapse dynamics for several LaBraM settings, especially in 3-class mode (left/right/rest), where completed runs plateaued at 0.5000 validation accuracy near \ceThree. Binary LaBraM improved modestly, with the best completed run reaching 0.5556. A full LaBraM fine-tune run reached train accuracy 0.9966 but only 0.5222 validation accuracy, indicating severe overfitting. The curriculum run improved checkpoint selection robustness (best MCC 0.0753; best val\_acc 0.5378; best balanced accuracy 0.5339) without surpassing the best binary accuracy. The compact EEGNetResidual baseline achieved 0.5919 on the cross-subject split. Muse personalization in current script defaults trains on all data (no holdout); when a holdout is enforced (\texttt{--no-use-all-data}), best validation accuracy is 0.5918 (epoch 82, 247 total epochs, 49 validation epochs). We provide formal propositions/proofs for diagnostic metrics (chance-level cross-entropy, collapse-accuracy bounds, MCC degeneracy for constant predictors, token-budget bounds in LaBraM preprocessing), exploratory code listings, and a reproducible run ledger suitable for critical academic audit.
+This manuscript consolidates the full EEG motor-imagery (MI) research trail implemented in \texttt{ml/}, including script code and notebook experiments (\texttt{ml/labram-for-eegmmidb.ipynb}). We systematize two modeling tracks: (i) LaBraM transfer experiments with probing, partial/full fine-tuning, and two-stage curriculum training; and (ii) EEGNet/EEGNetResidual compact baselines with subsequent user-level Muse calibration tuning. The cross-subject PhysioNet split used subjects 1--40 for training and 41--50 for validation, with runs [4, 8, 12]. Consolidated evidence shows persistent class-collapse dynamics for several LaBraM settings, especially in 3-class mode (left/right/rest), where completed runs plateaued at 0.5000 validation accuracy near \ceThree. Binary LaBraM improved modestly, with the best completed run reaching 0.5556. A full LaBraM fine-tune run reached train accuracy 0.9966 but only 0.5222 validation accuracy, indicating severe overfitting. The curriculum run improved checkpoint selection robustness (best MCC 0.0753; best val\_acc 0.5378; best balanced accuracy 0.5339) without surpassing the best binary accuracy. The compact EEGNetResidual baseline achieved 0.5919 on the cross-subject split. We then ran an expanded Muse tuning sweep over six calibration files (v1--v3, left/right), comparing freezing policy, learning rate, overlap windowing, class-weighted loss, and split protocol; the strongest controlled holdout result was 0.6531 with stratified 80/20 splitting, no overlap, standard cross-entropy, and full-model fine-tuning. We provide formal propositions/proofs for diagnostic metrics (chance-level cross-entropy, collapse-accuracy bounds, MCC degeneracy for constant predictors, token-budget bounds in LaBraM preprocessing), exploratory code listings, and a reproducible run ledger suitable for critical academic audit.
 \end{abstract}
 
 \begin{document}
@@ -103,7 +103,7 @@ Observed consolidated split statistics:
 \textbf{Muse calibration setup.}
 Current discovered calibration files:
 \texttt{left\_muse\_v1,v2,v3.csv} and \texttt{right\_muse\_v1,v2,v3.csv} (6 files total).
-Epoch counts (3-second windows) sum to 247 samples. Holdout mode with \texttt{val\_split=0.2} gives 198 training and 49 validation samples.
+With non-overlapping 3-second windows (\texttt{stride-seconds=3.0}), epoch counts sum to 247 samples. Holdout mode with \texttt{val\_split=0.2} gives 198 training and 49 validation samples. With overlapping windows (\texttt{stride-seconds=1.5}), the same recordings produce 490 epochs (392/98 under 80/20 split).
 
 \subsection{Signal Processing}
 Both tracks apply 8--30 Hz band-pass filtering (5th-order Butterworth in code).
@@ -135,7 +135,7 @@ The backbone in code uses \(T=\)200 patch size, \(d=\)200 embedding dimension, d
 \textbf{EEGNet track.}
 \begin{itemize}
 \item Cross-subject baseline: \texttt{ml/\_\_main\_\_.py} with EEGNetResidual, 4 channels, best val accuracy 0.5919 (log excerpt in appendix).
-\item Later tuning: \texttt{ml/tune\_eegnet\_muse.py} on user calibration CSVs.
+\item Later tuning: \texttt{ml/tune\_eegnet\_muse.py} on user calibration CSVs, including a controlled sweep over freezing policy, overlap windows, learning rate, class-weighted loss, and split strategy.
 \end{itemize}
 
 \subsection{Optimization Objective}
@@ -240,8 +240,12 @@ Run & Data regime & Key setting & Outcome \\
 \midrule
 \endhead
 Cross-subject EEGNetResidual baseline (\texttt{ml/\_\_main\_\_.py}) & Train 2925 / Val 750, shape \((4,481)\), class counts train \([1470,1455]\), val \([379,371]\) & Early-stop patience 200, CPU log excerpt archived & Best val\_acc 0.5919 at epoch 73; stop at epoch 273 \\
-Muse tuning holdout (\texttt{tune\_eegnet\_muse.py --no-use-all-data}) & 6 CSVs, total 247 epochs, split 198/49 & Freeze early layers (\texttt{conv1}, \texttt{batchnorm1}), 200 epochs & Best val\_acc 0.5918 at epoch 82 \\
-Muse tuning default (\texttt{tune\_eegnet\_muse.py}) & 6 CSVs, all 247 epochs in train & \texttt{--use-all-data} default enabled, no validation split & Best train loss 0.4539 at epoch 196; no validation accuracy reported \\
+Muse tuning (legacy random split) & 6 CSVs, total 247 epochs, split 198/49 & \texttt{--no-use-all-data}, freeze early, lr \(=10^{-4}\) & Best val\_acc 0.5714 \\
+Muse tuning (stratified, no overlap; recommended holdout protocol) & 6 CSVs, total 247 epochs, stratified 198/49 & \texttt{--no-use-all-data --stratified-split}, no freeze, lr \(=10^{-4}\), stride 3.0 & Best val\_acc 0.6531 at epoch 63; checkpoint \texttt{eegnet\_tuned\_best\_stratified\_nostride.pth} \\
+Muse tuning (stratified, no overlap, freeze ablation) & 6 CSVs, total 247 epochs, stratified 198/49 & Same as above + \texttt{--freeze-early} & Best val\_acc 0.6327 \\
+Muse tuning (stratified, overlap ablation) & 6 CSVs, total 490 epochs, stratified 392/98 & stride 1.5, no freeze, lr \(=10^{-4}\) & Best val\_acc 0.6224 \\
+Muse tuning (stratified, class-weighted loss ablation) & 6 CSVs, total 490 epochs, stratified 392/98 & stride 1.5 + class-weighted CE & Best val\_acc 0.6020 \\
+Muse deployment tuning (all-data mode) & 6 CSVs, all 247 epochs in train & \texttt{--use-all-data}, no validation split, lr \(=10^{-4}\) & Best train loss 0.5480 at epoch 64; checkpoint \texttt{eegnet\_tuned\_all\_data\_bestcfg.pth} \\
 \bottomrule
 \end{longtable}
 
@@ -269,7 +273,7 @@ From notebook exploratory analysis:
 Near-zero silhouette values indicate weakly separated clusters in low-dimensional projections, consistent with observed collapse dynamics.
 
 \subsection{EEGNet Track Interpretation}
-The compact cross-subject EEGNetResidual baseline (0.5919) exceeds all completed LaBraM runs in this consolidated record (best LaBraM 0.5556). Muse tuning with enforced holdout produced 0.5918. Importantly, current script defaults do not produce a validation metric unless \texttt{--no-use-all-data} is set, which is critical for scientific reporting discipline.
+The compact cross-subject EEGNetResidual baseline (0.5919) still exceeds all completed LaBraM runs in this consolidated record (best LaBraM 0.5556). In the expanded Muse sweep, holdout performance is strongly protocol-dependent: random split settings were optimistic/noisy, while stratified holdout yielded a stable best of 0.6531 (no overlap, no freeze, lr \(=10^{-4}\)). Overlap augmentation to 490 epochs did not improve the stratified metric (best 0.6224), and class-weighted loss further reduced performance (0.6020). This indicates the recent degradation with added files is mitigated more by split discipline and conservative tuning than by aggressive augmentation. As before, \texttt{--use-all-data} remains useful for final deployment checkpointing but must not be treated as validation evidence.
 
 \section{Exploratory Code Listings}
 \subsection*{Listing 1: LaBraM token-budget rule (\texttt{ml/eeg/layers/labram\_encoder.py})}
@@ -307,10 +311,14 @@ if use_all_data:
     y_val = np.empty((0,), dtype=y.dtype)
     print("Training mode: using all data (no validation split).")
 else:
-    X_train, y_train, X_val, y_val = _split_train_val(
-        X, y, val_split=args.val_split, seed=args.seed
-    )
-    print(f"Training mode: train/val split with val_split={args.val_split:.2f}")
+    if args.stratified_split:
+        X_train, y_train, X_val, y_val = _split_train_val_stratified(
+            X, y, val_split=args.val_split, seed=args.seed
+        )
+    else:
+        X_train, y_train, X_val, y_val = _split_train_val(
+            X, y, val_split=args.val_split, seed=args.seed
+        )
 \end{lstlisting}
 
 \section{Discussion}
@@ -320,6 +328,7 @@ The consolidated evidence supports a careful, publication-grade negative-to-mixe
 \item Multiple LaBraM runs show collapse dynamics predicted by simple metric theory (Sections 4--6).
 \item Curriculum learning improved checkpoint \emph{selection quality} (MCC), but not final best accuracy relative to the best binary run.
 \item Muse personalization remains promising, but must be reported with explicit split protocol; all-data training cannot be treated as validation evidence.
+\item On the current 6-file Muse set, stratified holdout with non-overlapping windows outperformed overlap augmentation and class-weighted loss, suggesting that better evaluation protocol and moderate optimization changes dominate more complex tuning heuristics.
 \end{itemize}
 
 These findings are still scientifically useful: they isolate where transfer currently fails (representation-task interface and optimization stability), rather than only reporting top-line numbers.
@@ -327,13 +336,13 @@ These findings are still scientifically useful: they isolate where transfer curr
 \section{Limitations and Threats to Validity}
 \begin{itemize}
 \item Several notebook runs were interrupted; they provide trajectory evidence, not completed endpoint claims.
-\item No multi-seed inferential statistics are included yet.
+\item The new Muse sweep is primarily single-seed (\(seed=42\)); no multi-seed confidence intervals are reported yet.
 \item Cross-subject and within-user regimes are different tasks; direct score comparison should be interpreted cautiously.
-\item Muse holdout is random within captured sessions; external-session generalization remains untested.
+\item Muse holdout is still within-user and currently random/stratified at epoch level; strict session-wise holdout (e.g., train on v1/v2, test on v3) remains to be added.
 \end{itemize}
 
 \section{Conclusion}
-After consolidating all available \texttt{ml/} artifacts, the current evidence shows: (i) frequent LaBraM class-collapse behavior in 3-class MI; (ii) modest binary improvements with best completed LaBraM val\_acc 0.5556; (iii) strong overfitting under full fine-tuning; (iv) improved selection stability but limited headline gain under curriculum learning; and (v) competitive compact CNN performance (0.5919 cross-subject baseline, 0.5918 Muse holdout tuning). The immediate research direction is not broader claim inflation, but rigorous stabilization: seed-robust protocols, stronger regularization, tighter calibration evaluation, and controlled comparisons against compact baselines under identical splits.
+After consolidating all available \texttt{ml/} artifacts, the current evidence shows: (i) frequent LaBraM class-collapse behavior in 3-class MI; (ii) modest binary improvements with best completed LaBraM val\_acc 0.5556; (iii) strong overfitting under full fine-tuning; (iv) improved selection stability but limited headline gain under curriculum learning; and (v) competitive compact CNN performance (0.5919 cross-subject baseline, 0.6531 best stratified Muse holdout tuning on 6 calibration files). The latest tuning sweep further indicates that non-overlapping windows and standard CE with full-model updates are currently stronger than overlap augmentation or class-weighted loss for this user-specific regime. The immediate research direction is not broader claim inflation, but rigorous stabilization: multi-seed evaluation, session-wise holdout protocols, tighter calibration evaluation, and controlled comparisons against compact baselines under identical splits.
 
 \section{Reproducibility and Availability}
 \textbf{Code paths.}
@@ -342,8 +351,10 @@ Core scripts are in \texttt{ml/}; this manuscript references exact files listed 
 \textbf{Representative commands.}
 \begin{verbatim}
 python ml/labram_probe.py
-python ml/tune_eegnet_muse.py --data-dir ml/calibration_data --no-use-all-data
-python ml/tune_eegnet_muse.py --data-dir ml/calibration_data
+python ml/tune_eegnet_muse.py --data-dir ml/calibration_data --no-use-all-data \
+  --stratified-split --val-split 0.2 --epochs 80 --learning-rate 1e-4
+python ml/tune_eegnet_muse.py --data-dir ml/calibration_data --use-all-data \
+  --output-checkpoint ml/models/baseline_2/eegnet_tuned_all_data_bestcfg.pth
 \end{verbatim}
 
 \textbf{Raw logs.}

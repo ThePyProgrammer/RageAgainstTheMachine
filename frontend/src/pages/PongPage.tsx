@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { API_ENDPOINTS } from "@/config/api";
+import { useDevice } from "@/contexts/DeviceContext";
 import { CalibrationWizard } from "@/features/pong/components/CalibrationWizard";
 import { GameCanvas } from "@/features/pong/components/GameCanvas";
 import { KeyboardHints } from "@/features/pong/components/KeyboardHints";
@@ -13,18 +14,32 @@ import { usePongSettings } from "@/features/pong/state/usePongSettings";
 import { deriveScoreAccentColor, resolveUiColorToken } from "@/features/pong/types/pongSettings";
 import type { DebugStats, GameScreen, RuntimeState } from "@/features/pong/types/pongRuntime";
 import { useAIOpponent } from "@/hooks/useAIOpponent";
+import { useBCIStream } from "@/hooks/useBCIStream";
 import type { OpponentInputMode } from "@/hooks/useAIOpponent";
 import { EEGStreamModal } from "@/combat3d/ui/EEGStreamModal";
 
 type CalibrationStep = "left" | "right" | "fine_tuning" | "complete" | "error";
 type BallControlMode = "paddle" | "ball";
 type PaddleCommand = "none" | "left" | "right";
+type CaptureKeyState = "none" | "left" | "right";
 type ActiveTaunt = { text: string; timestamp: number };
 type SentOpponentEvent = {
   sentAtMs: number;
   event: OpponentLoopEventPayload["event"];
   score: string;
 };
+type CapturedKeyboardEegRow = {
+  timestampMs: number;
+  keyPressed: CaptureKeyState;
+  channelValuesUv: number[];
+};
+type KeyboardMovementState = {
+  left: boolean;
+  right: boolean;
+  up: boolean;
+  down: boolean;
+};
+type MovementStateKey = keyof KeyboardMovementState;
 type EegHemisphere = "left" | "right";
 
 interface EegPaneState {
@@ -45,6 +60,7 @@ const OPPONENT_DEBUG = import.meta.env.DEV;
 const EEG_WS_INTERVAL_MS = 120;
 const EEG_COMMAND_HOLD_MS = 900;
 const EEG_MIN_CONFIDENCE = 56;
+const KEY_TIMELINE_RETENTION = 2000;
 
 const createRuntimeState = (): RuntimeState => ({
   width: 960,
@@ -124,6 +140,32 @@ const parseErrorMessage = (payload: unknown, fallback: string): string => {
   return fallback;
 };
 
+const toMovementStateKey = (key: string): MovementStateKey | null => {
+  const normalized = key.toLowerCase();
+  if (normalized === "arrowleft" || normalized === "a") {
+    return "left";
+  }
+  if (normalized === "arrowright" || normalized === "d") {
+    return "right";
+  }
+  if (normalized === "arrowup" || normalized === "w") {
+    return "up";
+  }
+  if (normalized === "arrowdown" || normalized === "s") {
+    return "down";
+  }
+  return null;
+};
+
+const resolveCaptureDirection = (movementState: KeyboardMovementState): CaptureKeyState => {
+  const leftPressed = movementState.left || movementState.up;
+  const rightPressed = movementState.right || movementState.down;
+  if (leftPressed === rightPressed) {
+    return "none";
+  }
+  return leftPressed ? "left" : "right";
+};
+
 async function postJson<TResponse>(
   url: string,
   body?: Record<string, unknown>,
@@ -168,6 +210,8 @@ async function ensureEegStreamRunning(): Promise<void> {
 export default function PongPage() {
   const { settings, updateSettings, resetSettings } = usePongSettings();
   const { latestUpdate, latestFeedbackUpdate, sendGameEvent, playLatestAudio } = useAIOpponent();
+  const { displayData, sampleCount, isStreaming } = useBCIStream();
+  const { deviceConfig, deviceType } = useDevice();
 
   const [screen, setScreen] = useState<GameScreen>("menu");
   const [ballControlMode, setBallControlMode] = useState<BallControlMode>("paddle");
@@ -186,6 +230,10 @@ export default function PongPage() {
   const [eegCommand, setEegCommand] = useState<PaddleCommand>("none");
   const [stressLevel, setStressLevel] = useState(DEFAULT_STRESS_LEVEL);
   const [activeTaunt, setActiveTaunt] = useState<ActiveTaunt | null>(null);
+  const [isKeyboardEegCapturing, setIsKeyboardEegCapturing] = useState(false);
+  const [capturedKeyboardEegSamples, setCapturedKeyboardEegSamples] = useState(0);
+  const [captureNotice, setCaptureNotice] = useState<string | null>(null);
+  const [captureBusy, setCaptureBusy] = useState(false);
   const [eegPane, setEegPane] = useState<EegPaneState>(() => createInitialEegPaneState());
 
   const debugRef = useRef<DebugStats>(INITIAL_DEBUG);
@@ -200,6 +248,20 @@ export default function PongPage() {
   const processedUpdateKeyRef = useRef<string | null>(null);
   const processedFeedbackUpdateKeyRef = useRef<string | null>(null);
   const sentOpponentEventsRef = useRef<Map<string, SentOpponentEvent>>(new Map());
+  const keyboardEegRowsRef = useRef<CapturedKeyboardEegRow[]>([]);
+  const lastCapturedSampleCountRef = useRef(0);
+  const movementStateRef = useRef<KeyboardMovementState>({
+    left: false,
+    right: false,
+    up: false,
+    down: false,
+  });
+  const captureDirectionRef = useRef<CaptureKeyState>("none");
+  const captureDirectionTimelineRef = useRef<
+    Array<{ timestampMs: number; keyPressed: CaptureKeyState }>
+  >([]);
+  const captureDirectionIndexRef = useRef(0);
+  const isCapturingRef = useRef(false);
   const eegLastPacketAtRef = useRef(0);
   const eegPacketRateWindowRef = useRef({
     windowStartMs: performance.now(),
@@ -257,6 +319,89 @@ export default function PongPage() {
     processedUpdateKeyRef.current = null;
     processedFeedbackUpdateKeyRef.current = null;
   }, []);
+
+  const downloadCaptureCsv = useCallback(
+    (rows: CapturedKeyboardEegRow[]) => {
+      if (rows.length === 0) {
+        setCaptureNotice("Capture stopped. No EEG samples were recorded.");
+        return;
+      }
+
+      const header = [
+        "timestamp_ms",
+        "key_pressed",
+        ...deviceConfig.channelNames.map((channelName) => `ch${channelName}_raw_uv`),
+      ];
+      const csvRows = rows.map((row) =>
+        [
+          String(row.timestampMs),
+          row.keyPressed,
+          ...row.channelValuesUv.map((value) => value.toFixed(6)),
+        ].join(","),
+      );
+      const csvContent = [header.join(","), ...csvRows].join("\n");
+      const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      const dateStamp = new Date().toISOString().replace(/[:.]/g, "-");
+      link.href = url;
+      link.download = `pong_keyboard_eeg_capture_${deviceType}_${dateStamp}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+
+      setCaptureNotice(`Downloaded ${rows.length} EEG samples.`);
+    },
+    [deviceConfig.channelNames, deviceType],
+  );
+
+  const stopCaptureAndDownload = useCallback(() => {
+    if (!isCapturingRef.current) {
+      return;
+    }
+
+    const rows = keyboardEegRowsRef.current;
+    isCapturingRef.current = false;
+    setIsKeyboardEegCapturing(false);
+    setCapturedKeyboardEegSamples(rows.length);
+    keyboardEegRowsRef.current = [];
+    lastCapturedSampleCountRef.current = sampleCount;
+    captureDirectionTimelineRef.current = [];
+    captureDirectionIndexRef.current = 0;
+    downloadCaptureCsv(rows);
+  }, [downloadCaptureCsv, sampleCount]);
+
+  const startCapture = useCallback(async () => {
+    if (isCapturingRef.current || captureBusy) {
+      return;
+    }
+
+    setCaptureBusy(true);
+    setCaptureNotice(null);
+
+    try {
+      await ensureEegStreamRunning();
+      keyboardEegRowsRef.current = [];
+      lastCapturedSampleCountRef.current = sampleCount;
+      captureDirectionTimelineRef.current = [
+        {
+          timestampMs: Date.now(),
+          keyPressed: captureDirectionRef.current,
+        },
+      ];
+      captureDirectionIndexRef.current = 0;
+      setCapturedKeyboardEegSamples(0);
+      isCapturingRef.current = true;
+      setIsKeyboardEegCapturing(true);
+    } catch (error) {
+      setCaptureNotice(
+        error instanceof Error ? error.message : "Unable to start EEG capture.",
+      );
+    } finally {
+      setCaptureBusy(false);
+    }
+  }, [captureBusy, sampleCount]);
 
   const teardownMiSocket = useCallback(
     (sendStop: boolean) => {
@@ -425,6 +570,8 @@ export default function PongPage() {
       teardownMiSocket(true);
       resetRuntime();
       resetOpponentFeedback();
+      setCaptureNotice(null);
+      setCapturedKeyboardEegSamples(0);
       pausedRef.current = false;
       setBallControlMode(mode);
       setInputMode(mode === "ball" ? "keyboard_ball" : "keyboard_paddle");
@@ -687,6 +834,58 @@ export default function PongPage() {
   }, []);
 
   useEffect(() => {
+    const updateMovementState = (event: KeyboardEvent, isPressed: boolean) => {
+      const movementKey = toMovementStateKey(event.key);
+      if (!movementKey) {
+        return;
+      }
+
+      if (movementStateRef.current[movementKey] === isPressed) {
+        return;
+      }
+
+      movementStateRef.current[movementKey] = isPressed;
+      const nextDirection = resolveCaptureDirection(movementStateRef.current);
+      if (nextDirection === captureDirectionRef.current) {
+        return;
+      }
+
+      captureDirectionRef.current = nextDirection;
+      if (!isCapturingRef.current) {
+        return;
+      }
+
+      captureDirectionTimelineRef.current.push({
+        timestampMs: Date.now(),
+        keyPressed: nextDirection,
+      });
+
+      if (captureDirectionTimelineRef.current.length <= KEY_TIMELINE_RETENTION * 2) {
+        return;
+      }
+
+      const removeCount = captureDirectionTimelineRef.current.length - KEY_TIMELINE_RETENTION;
+      captureDirectionTimelineRef.current.splice(0, removeCount);
+      captureDirectionIndexRef.current = Math.max(0, captureDirectionIndexRef.current - removeCount);
+    };
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      updateMovementState(event, true);
+    };
+
+    const onKeyUp = (event: KeyboardEvent) => {
+      updateMovementState(event, false);
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+    };
+  }, []);
+
+  useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const key = event.key.toLowerCase();
       if (key === "escape") {
@@ -742,6 +941,72 @@ export default function PongPage() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [calibrationRunning, overlayOpen, screen, startEEGCalibration, startKeyboard, teardownMiSocket]);
+
+  useEffect(() => {
+    if (!isKeyboardEegCapturing) {
+      return;
+    }
+
+    const pendingSampleCount = sampleCount - lastCapturedSampleCountRef.current;
+    if (pendingSampleCount <= 0) {
+      return;
+    }
+
+    const availableSampleCount = Math.min(pendingSampleCount, displayData.length);
+    if (availableSampleCount <= 0) {
+      lastCapturedSampleCountRef.current = sampleCount;
+      return;
+    }
+
+    const droppedSampleCount = pendingSampleCount - availableSampleCount;
+    const latestPoints = displayData.slice(-availableSampleCount);
+    const directionTimeline = captureDirectionTimelineRef.current;
+    let directionIndex = captureDirectionIndexRef.current;
+
+    const capturedRows = latestPoints.map((point) => {
+      const timestampMs =
+        typeof point.timestampMs === "number" && Number.isFinite(point.timestampMs)
+          ? point.timestampMs
+          : Date.now();
+
+      while (
+        directionIndex + 1 < directionTimeline.length &&
+        directionTimeline[directionIndex + 1].timestampMs <= timestampMs
+      ) {
+        directionIndex += 1;
+      }
+
+      const keyPressed = directionTimeline[directionIndex]?.keyPressed ?? captureDirectionRef.current;
+      const channelValuesUv = deviceConfig.channelNames.map((channelName) => {
+        const rawValue = point[`ch${channelName}`];
+        return typeof rawValue === "number" && Number.isFinite(rawValue) ? rawValue : 0;
+      });
+
+      return {
+        timestampMs,
+        keyPressed,
+        channelValuesUv,
+      };
+    });
+
+    captureDirectionIndexRef.current = directionIndex;
+    keyboardEegRowsRef.current.push(...capturedRows);
+    setCapturedKeyboardEegSamples((previous) => previous + capturedRows.length);
+    lastCapturedSampleCountRef.current = sampleCount;
+
+    if (droppedSampleCount > 0) {
+      setCaptureNotice(`Dropped ${droppedSampleCount} EEG samples from the capture window.`);
+    }
+  }, [deviceConfig.channelNames, displayData, isKeyboardEegCapturing, sampleCount]);
+
+  useEffect(() => {
+    const isManualKeyboardMode = inputMode === "keyboard_paddle";
+    const inGameSession = screen === "game" || screen === "paused";
+    if (!isKeyboardEegCapturing || (isManualKeyboardMode && inGameSession)) {
+      return;
+    }
+    stopCaptureAndDownload();
+  }, [inputMode, isKeyboardEegCapturing, screen, stopCaptureAndDownload]);
 
   useEffect(() => {
     if (screen !== "game" && screen !== "paused") {
@@ -817,6 +1082,9 @@ export default function PongPage() {
     [publishDebug],
   );
 
+  const showCaptureControls =
+    (screen === "game" || screen === "paused") && inputMode === "keyboard_paddle";
+
   return (
     <div className="relative min-h-[calc(100vh-4rem)] bg-black text-white">
       {screen === "menu" && (
@@ -881,6 +1149,40 @@ export default function PongPage() {
             />
           )}
           <KeyboardHints mode="game" />
+          {showCaptureControls && (
+            <div className="fixed right-3 top-3 z-30 rounded border border-cyan-400/40 bg-black/90 p-3 text-xs text-cyan-100 shadow-[0_0_18px_rgba(34,211,238,0.2)]">
+              <p className="font-mono text-[11px] uppercase tracking-wide text-cyan-200">
+                Manual EEG Capture
+              </p>
+              <p className="mt-1 font-mono tabular-nums text-cyan-100">
+                {capturedKeyboardEegSamples} samples
+              </p>
+              <p className="font-mono text-[11px] text-cyan-300/90">
+                Stream: {isStreaming ? "on" : "off"}
+              </p>
+              <button
+                type="button"
+                onClick={
+                  isKeyboardEegCapturing
+                    ? stopCaptureAndDownload
+                    : () => {
+                        void startCapture();
+                      }
+                }
+                disabled={captureBusy}
+                className="mt-2 w-full rounded border border-cyan-300/60 px-2 py-1.5 font-semibold text-cyan-100 transition hover:border-cyan-200 hover:bg-cyan-400/10 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {isKeyboardEegCapturing
+                  ? "Stop Recording & Download CSV"
+                  : captureBusy
+                    ? "Starting..."
+                    : "Start Recording EEG CSV"}
+              </button>
+              {captureNotice && (
+                <p className="mt-2 max-w-60 text-[11px] text-cyan-200/80">{captureNotice}</p>
+              )}
+            </div>
+          )}
           <div className="absolute top-2 right-2 z-40 flex items-center gap-1">
             <button
               type="button"
