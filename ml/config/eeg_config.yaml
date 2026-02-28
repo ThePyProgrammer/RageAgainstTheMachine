@@ -63,25 +63,7 @@ preprocessing:
   filter_order: 5
   notch_freq: 60.0 # Hz, US power line frequency
   channels:
-    [
-      "FC3",
-      "FC1",
-      "FCz",
-      "FC2",
-      "FC4",
-      "C5",
-      "C3",
-      "C1",
-      "Cz",
-      "C2",
-      "C4",
-      "C6",
-      "CP3",
-      "CP1",
-      "CPz",
-      "CP2",
-      "CP4",
-    ]
+    ["AF7", "AF8", "TP9", "TP10"] # Muse-style channels (TP9/TP10 remapped to T9/T10 on PhysioNet)
 
 # Epoching
 epochs:
@@ -92,7 +74,7 @@ epochs:
 # Model training
 model:
   architecture: "EEGNet"
-  input_channels: 17
+  input_channels: 4
   num_classes: 4 # left hand, right hand, feet, rest
   dropout: 0.5
   kernel_length: 64
@@ -105,7 +87,7 @@ training:
   num_epochs: 1000 # Increased for residual network
   validation_split: 0.2
   early_stopping_patience: 200 # More patience for residual network
-  savedir: _archive/mi/models/baseline_2
+  savedir: models/baseline_2
   savename: eegnet_best.pth
 
 # Command mapping

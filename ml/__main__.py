@@ -31,7 +31,7 @@ def prepare_data(config: dict):
     print(f"  Validation subjects: {val_subjects}")
     print(f"  Runs per subject:    {runs}")
 
-    data_dir = get_project_root() / "mi" / "data" / "raw" / "physionet"
+    data_dir = get_project_root() / "data" / "raw" / "physionet"
     dataset = PhysioNetDataset(str(data_dir))
 
     preprocess_config = config["preprocessing"]

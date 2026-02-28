@@ -32,6 +32,41 @@ current_fine_tuner: Optional[SimpleFineTuner] = None
 mi_processor: Optional[MIProcessor] = None
 
 
+def _normalize_channel_name(name: str) -> str:
+    return str(name).strip().upper()
+
+
+def _resolve_channel_indices(
+    source_channels: list[str], target_channels: list[str]
+) -> Optional[list[int]]:
+    """Resolve target channels to indices in source channel order.
+
+    Supports TP9/T9 and TP10/T10 aliasing to align PhysioNet/Muse naming.
+    """
+    source_lookup = {
+        _normalize_channel_name(channel_name): idx
+        for idx, channel_name in enumerate(source_channels)
+    }
+    alias_map = {
+        "TP9": "T9",
+        "TP10": "T10",
+        "T9": "TP9",
+        "T10": "TP10",
+    }
+    resolved_indices: list[int] = []
+
+    for target_name in target_channels:
+        target_key = _normalize_channel_name(target_name)
+        idx = source_lookup.get(target_key)
+        if idx is None and target_key in alias_map:
+            idx = source_lookup.get(alias_map[target_key])
+        if idx is None:
+            return None
+        resolved_indices.append(idx)
+
+    return resolved_indices
+
+
 def _reset_mi_state(eeg_stream):
     """Clear MI streaming state and detach from EEG stream."""
     global is_running, mi_processor
@@ -97,12 +132,50 @@ async def websocket_endpoint(websocket: WebSocket):
                     # Create thread-safe prediction queue for communication between EEG thread and WebSocket
                     prediction_queue = queue.Queue(maxsize=100)
 
+                    mi_config = mi_init.load_mi_config()
+                    target_channels = list(mi_config["preprocessing"]["channels"])
+                    source_channels = list(getattr(eeg_stream, "channel_names", []))
+                    source_rate = float(getattr(eeg_stream, "sampling_rate", 250.0))
+                    target_rate = float(mi_config["preprocessing"]["sampling_rate"])
+                    epoch_seconds = float(mi_config["epochs"]["tmax"]) - float(
+                        mi_config["epochs"]["tmin"]
+                    )
+                    epoch_samples = max(1, int(round(epoch_seconds * source_rate)))
+                    target_samples = max(1, int(round(epoch_seconds * target_rate)))
+
+                    channel_indices = None
+                    if source_channels:
+                        channel_indices = _resolve_channel_indices(
+                            source_channels, target_channels
+                        )
+                        if channel_indices is not None:
+                            logger.info(
+                                "[MI-WS] Channel mapping %s -> %s using indices %s",
+                                source_channels,
+                                target_channels,
+                                channel_indices,
+                            )
+                        else:
+                            logger.warning(
+                                "[MI-WS] Could not map source channels %s to target channels %s. "
+                                "Using native channel order as fallback.",
+                                source_channels,
+                                target_channels,
+                            )
+
+                    processor_channels = (
+                        len(channel_indices)
+                        if channel_indices is not None
+                        else (len(source_channels) if source_channels else 8)
+                    )
+
                     mi_processor = MIProcessor(
-                        epoch_samples=750,  # 3 seconds at 250Hz (live stream rate)
-                        n_channels=8,  # Cyton board has 8 EEG channels
-                        target_samples=480,  # Model expects 480 samples (3s at 160Hz)
-                        source_rate=250.0,  # Live stream sampling rate
-                        target_rate=160.0,  # Model training sampling rate
+                        epoch_samples=epoch_samples,
+                        n_channels=processor_channels,
+                        target_samples=target_samples,
+                        source_rate=source_rate,
+                        target_rate=target_rate,
+                        channel_indices=channel_indices,
                     )
 
                     def classification_callback(eeg_epoch: np.ndarray):

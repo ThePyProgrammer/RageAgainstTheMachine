@@ -37,6 +37,8 @@ class EEGStreamer:
         self.session_manager = None
         self.ws_broadcaster = WebSocketBroadcaster()
         cyton_cfg = get_device_config("cyton")
+        self.channel_names = cyton_cfg["eeg_channel_names"]
+        self.sampling_rate = cyton_cfg["sampling_rate"]
         self.command_centre_processor = CommandCentreSignalProcessor(
             channel_names=cyton_cfg["eeg_channel_names"],
             sampling_rate=cyton_cfg["sampling_rate"],
