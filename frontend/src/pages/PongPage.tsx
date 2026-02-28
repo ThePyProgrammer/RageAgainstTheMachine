@@ -634,6 +634,41 @@ export default function PongPage() {
         if (payload.type === "prediction") {
           const nextCommand = mapCommandToPaddle(payload.command);
           const confidence = Number(payload.confidence ?? 0);
+          const now = performance.now();
+          eegLastPacketAtRef.current = now;
+
+          const packetRateWindow = eegPacketRateWindowRef.current;
+          packetRateWindow.packetCount += 1;
+          const elapsed = now - packetRateWindow.windowStartMs;
+          if (elapsed >= 1000) {
+            packetRateWindow.packetRateHz = (packetRateWindow.packetCount * 1000) / elapsed;
+            packetRateWindow.packetCount = 0;
+            packetRateWindow.windowStartMs = now;
+          }
+
+          const normalizedConfidence = Number.isFinite(confidence)
+            ? clamp01(confidence > 1 ? confidence / 100 : confidence)
+            : 0;
+          const activeHemisphere: EegHemisphere = nextCommand === "right" ? "right" : "left";
+          const leftPower = activeHemisphere === "left"
+            ? 0.56 + normalizedConfidence * 0.36
+            : Math.max(0.12, 0.26 - normalizedConfidence * 0.08);
+          const rightPower = activeHemisphere === "right"
+            ? 0.56 + normalizedConfidence * 0.36
+            : Math.max(0.12, 0.26 - normalizedConfidence * 0.08);
+          const direction = activeHemisphere === "right" ? 1 : -1;
+          const sample = clampSignal(
+            direction * (0.36 + normalizedConfidence * 0.46)
+              + Math.sin(now / 95) * (0.15 + normalizedConfidence * 0.32),
+          );
+
+          pushEegSample(sample, {
+            leftPower,
+            rightPower,
+            confidence: normalizedConfidence,
+            packetRateHz: packetRateWindow.packetRateHz,
+            activeHemisphere,
+          });
 
           if (nextCommand !== "none") {
             if (Number.isFinite(confidence) && confidence > 0 && confidence < EEG_MIN_CONFIDENCE) {
@@ -668,7 +703,7 @@ export default function PongPage() {
         }
       };
     });
-  }, [publishDebug, teardownMiSocket]);
+  }, [applyEegCommand, publishDebug, pushEegSample, teardownMiSocket]);
 
   const waitWithProgress = useCallback(async (durationMs: number, start: number, end: number) => {
     const startedAt = performance.now();
