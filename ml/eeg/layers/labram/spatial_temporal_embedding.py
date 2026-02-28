@@ -101,7 +101,7 @@ class SpatialTemporalEmbedding(nn.Module):
                 pos_embed
             ), dim=1)
             # pos_embed is now of shape (B, N*P+1, embed_dim)
-            x += pos_embed
+            x = x + pos_embed
         
         # Temporal Embedding
         if self.time_embed is not None:
@@ -109,7 +109,7 @@ class SpatialTemporalEmbedding(nn.Module):
             # time_embed is of shape (P, embed_dim)
             time_embed = repeat(time_embed, 'P E -> B N P E', B=B, N=N).flatten(1,2)
             # time_embed is now of shape (B, N*P, embed_dim)
-            x[:, 1:, :] += time_embed
+            x[:, 1:, :] = x[:, 1:, :] + time_embed
             
         x = self.pos_drop(x)
         

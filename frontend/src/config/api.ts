@@ -30,6 +30,9 @@ export const API_ENDPOINTS = {
   MI_CONFIGURE: `${API_BASE_URL}/bci/motor_imagery/configure`,
   MI_LATEST: `${API_BASE_URL}/bci/motor_imagery/latest`,
   MI_WS: `${WS_BASE_URL}/mi/ws`,
+
+  // AI Opponent
+  OPPONENT_WS: `${WS_BASE_URL}/opponent/ws`,
 } as const;
 
 // Helper to build parameterized start URL

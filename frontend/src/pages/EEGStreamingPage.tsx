@@ -3,6 +3,10 @@ import TimeseriesGraph from "@/components/eeg/TimeseriesGraph";
 import { HeadPlot } from "@/components/eeg/HeadPlot3D";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
@@ -10,19 +14,32 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { AlertCircle, X } from "lucide-react";
+import { AlertCircle, Settings2, X } from "lucide-react";
 import { useBCIStream } from "@/hooks/useBCIStream";
 import { useEmbeddings } from "@/hooks/useClassificationModelEmbeddings";
 import { useDevice } from "@/contexts/DeviceContext";
 import { DEVICE_CONFIGS } from "@/config/eeg";
 import type { DeviceType } from "@/config/eeg";
+import type { BlinkDetectionSettings } from "@/types/eeg";
+
+type BlinkSettingKey = Exclude<keyof BlinkDetectionSettings, "selectedChannels">;
 
 export default function BCIDashboardPage() {
-  const { errorMessage, clearError, registerStopEmbeddings, isStreaming } =
-    useBCIStream();
+  const {
+    errorMessage,
+    clearError,
+    registerStopEmbeddings,
+    isStreaming,
+    blink,
+    blinkSettings,
+    updateBlinkSettings,
+    toggleBlinkDetectionChannel,
+    resetBlinkSettings,
+  } = useBCIStream();
   const { disableEmbeddings } = useEmbeddings();
-  const { deviceType, setDeviceType } = useDevice();
+  const { deviceType, setDeviceType, deviceConfig } = useDevice();
   const [isDismissed, setIsDismissed] = useState(false);
+  const [isBlinkDialogOpen, setIsBlinkDialogOpen] = useState(false);
 
   // Register embedding stop callback
   useEffect(() => {
@@ -30,6 +47,19 @@ export default function BCIDashboardPage() {
       await disableEmbeddings();
     });
   }, [registerStopEmbeddings, disableEmbeddings]);
+
+  useEffect(() => {
+    if (!isBlinkDialogOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIsBlinkDialogOpen(false);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [isBlinkDialogOpen]);
 
   const handleDismiss = () => {
     setIsDismissed(true);
@@ -39,6 +69,12 @@ export default function BCIDashboardPage() {
   const handleDeviceChange = (value: string) => {
     if (isStreaming) return; // Don't allow switching while streaming
     setDeviceType(value as DeviceType);
+  };
+
+  const handleBlinkSettingChange = (key: BlinkSettingKey, rawValue: string) => {
+    const parsedValue = Number(rawValue);
+    if (!Number.isFinite(parsedValue)) return;
+    updateBlinkSettings({ [key]: parsedValue } as Partial<Omit<BlinkDetectionSettings, "selectedChannels">>);
   };
 
   return (
@@ -63,6 +99,26 @@ export default function BCIDashboardPage() {
             Stop streaming to change device
           </span>
         )}
+        <div className="ml-auto flex items-center gap-3">
+          <span className="text-xs font-semibold text-zinc-500">Blinks</span>
+          <span
+            className={`h-2.5 w-2.5 rounded-full transition-all duration-150 ${
+              blink.detected
+                ? "bg-emerald-500 ring-4 ring-emerald-200 scale-125"
+                : "bg-zinc-300"
+            }`}
+          />
+          <span className="text-xs text-zinc-500 tabular-nums">{blink.blinkCount}</span>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setIsBlinkDialogOpen(true)}
+            className="h-8 cursor-pointer"
+          >
+            <Settings2 className="h-3.5 w-3.5" />
+            Blink Settings
+          </Button>
+        </div>
       </div>
 
       {/* Central Error Popup */}
@@ -97,6 +153,184 @@ export default function BCIDashboardPage() {
               </div>
             </Alert>
           </div>
+        </div>
+      )}
+
+      {isBlinkDialogOpen && (
+        <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/30 p-4">
+          <Card className="w-full max-w-3xl max-h-[85vh] overflow-hidden bg-white">
+            <CardHeader className="border-b border-zinc-200">
+              <div className="flex items-center justify-between">
+                <CardTitle>Blink Detection Settings</CardTitle>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={() => setIsBlinkDialogOpen(false)}
+                  className="cursor-pointer"
+                  aria-label="Close blink settings"
+                >
+                  <X className="h-4 w-4" />
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent className="max-h-[70vh] overflow-y-auto p-5 space-y-6">
+              <section className="space-y-2">
+                <h2 className="text-sm font-semibold text-zinc-700">
+                  Electrodes
+                </h2>
+                <p className="text-xs text-zinc-500">
+                  Select channels used for blink detection.
+                </p>
+                <div className="grid gap-2 sm:grid-cols-4">
+                  {deviceConfig.channelNames.map((channelName) => (
+                    <label
+                      key={channelName}
+                      className="flex items-center gap-2 border rounded-md p-2 text-sm"
+                    >
+                      <Checkbox
+                        checked={blinkSettings.selectedChannels.includes(channelName)}
+                        onCheckedChange={() =>
+                          toggleBlinkDetectionChannel(channelName)
+                        }
+                      />
+                      <span>{channelName}</span>
+                    </label>
+                  ))}
+                </div>
+              </section>
+
+              <section className="space-y-3">
+                <h2 className="text-sm font-semibold text-zinc-700">Thresholds</h2>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="space-y-1">
+                    <Label>Required channels</Label>
+                    <Input
+                      type="number"
+                      min={1}
+                      max={Math.max(1, blinkSettings.selectedChannels.length)}
+                      step={1}
+                      value={blinkSettings.requiredChannels}
+                      onChange={(event) =>
+                        handleBlinkSettingChange("requiredChannels", event.target.value)
+                      }
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label>Z-score threshold</Label>
+                    <Input
+                      type="number"
+                      min={0.5}
+                      max={10}
+                      step={0.1}
+                      value={blinkSettings.zScoreThreshold}
+                      onChange={(event) =>
+                        handleBlinkSettingChange("zScoreThreshold", event.target.value)
+                      }
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label>Min amplitude (µV)</Label>
+                    <Input
+                      type="number"
+                      min={0}
+                      max={500}
+                      step={1}
+                      value={blinkSettings.minAmplitudeUv}
+                      onChange={(event) =>
+                        handleBlinkSettingChange("minAmplitudeUv", event.target.value)
+                      }
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label>Min deviation (µV)</Label>
+                    <Input
+                      type="number"
+                      min={0.1}
+                      max={100}
+                      step={0.1}
+                      value={blinkSettings.minDeviationUv}
+                      onChange={(event) =>
+                        handleBlinkSettingChange("minDeviationUv", event.target.value)
+                      }
+                    />
+                  </div>
+                </div>
+              </section>
+
+              <section className="space-y-3">
+                <h2 className="text-sm font-semibold text-zinc-700">
+                  Timing and Adaptation
+                </h2>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="space-y-1">
+                    <Label>Warmup samples</Label>
+                    <Input
+                      type="number"
+                      min={0}
+                      max={deviceConfig.samplingRate * 10}
+                      step={1}
+                      value={blinkSettings.warmupSamples}
+                      onChange={(event) =>
+                        handleBlinkSettingChange("warmupSamples", event.target.value)
+                      }
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label>Baseline alpha</Label>
+                    <Input
+                      type="number"
+                      min={0.001}
+                      max={0.3}
+                      step={0.001}
+                      value={blinkSettings.baselineAlpha}
+                      onChange={(event) =>
+                        handleBlinkSettingChange("baselineAlpha", event.target.value)
+                      }
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label>Cooldown (ms)</Label>
+                    <Input
+                      type="number"
+                      min={0}
+                      max={5000}
+                      step={10}
+                      value={blinkSettings.cooldownMs}
+                      onChange={(event) =>
+                        handleBlinkSettingChange("cooldownMs", event.target.value)
+                      }
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label>Flash duration (ms)</Label>
+                    <Input
+                      type="number"
+                      min={50}
+                      max={3000}
+                      step={10}
+                      value={blinkSettings.flashMs}
+                      onChange={(event) =>
+                        handleBlinkSettingChange("flashMs", event.target.value)
+                      }
+                    />
+                  </div>
+                </div>
+              </section>
+
+              <div className="flex items-center justify-end gap-2">
+                <Button
+                  variant="outline"
+                  onClick={resetBlinkSettings}
+                  className="cursor-pointer"
+                >
+                  Reset Defaults
+                </Button>
+                <Button onClick={() => setIsBlinkDialogOpen(false)} className="cursor-pointer">
+                  Close
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
         </div>
       )}
 

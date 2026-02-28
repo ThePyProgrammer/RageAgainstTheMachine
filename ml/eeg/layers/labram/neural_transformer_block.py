@@ -91,12 +91,12 @@ class NeuralTransformerBlock(nn.Module):
 
         x_attn = self.attn(x)
         x_attn = self.gamma_1 * x_attn if self.gamma_1 is not None else x_attn
-        x += self.drop_path(x_attn)
+        x = x + self.drop_path(x_attn)
         
         x = self.norm2(x)
         
         x_mlp = self.mlp(x)
         x_mlp = self.gamma_2 * x_mlp if self.gamma_2 is not None else x_mlp
-        x += self.drop_path(x_mlp)
+        x = x + self.drop_path(x_mlp)
         
         return x
