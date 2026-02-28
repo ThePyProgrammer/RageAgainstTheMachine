@@ -11,6 +11,7 @@ interface EEGStreamModalProps {
   packetRateHz: number;
   activeHemisphere: EegHemisphere;
   mode: EegMode;
+  positionClassName?: string;
 }
 
 interface PowerBarProps {
@@ -50,6 +51,7 @@ export const EEGStreamModal = ({
   packetRateHz,
   activeHemisphere,
   mode,
+  positionClassName,
 }: EEGStreamModalProps) => {
   const [minimized, setMinimized] = useState(false);
 
@@ -78,7 +80,11 @@ export const EEGStreamModal = ({
   const rightActive = activeHemisphere === "right";
 
   return (
-    <div className="pointer-events-none absolute bottom-4 left-4 z-30 select-none">
+    <div
+      className={`pointer-events-none absolute z-30 select-none ${
+        positionClassName ?? "bottom-4 left-4"
+      }`}
+    >
       <div className="w-[280px] rounded-xl border border-cyan-300/25 bg-slate-950/80 p-2.5 shadow-[0_0_30px_rgba(6,182,212,0.18)] backdrop-blur-md">
         <div className={`flex items-center justify-between ${minimized ? "" : "mb-1.5"}`}>
           <div className="flex items-center gap-1.5">

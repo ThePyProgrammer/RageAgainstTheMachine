@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useBCIStream } from "@/hooks/useBCIStream";
+import { EEGStreamModal } from "@/combat3d/ui/EEGStreamModal";
 
 type GamePhase = "menu" | "running" | "paused" | "gameover";
 type ControlMode = "manual" | "eeg";
+type EegHemisphere = "left" | "right";
 
 interface Pipe {
   id: number;
@@ -29,6 +31,15 @@ interface CloudSeed {
   opacity: number;
 }
 
+interface EegPaneState {
+  waveSamples: number[];
+  leftPower: number;
+  rightPower: number;
+  confidence: number;
+  packetRateHz: number;
+  activeHemisphere: EegHemisphere;
+}
+
 const CANVAS_WIDTH = 960;
 const CANVAS_HEIGHT = 540;
 const GROUND_HEIGHT = 96;
@@ -50,6 +61,9 @@ const PIPE_MARGIN_TOP = 70;
 const PIPE_MARGIN_BOTTOM = 90;
 const MAX_FRAME_DELTA_MS = 34;
 const BEST_SCORE_STORAGE_KEY = "ratm.flappy.best-score";
+const EEG_WAVE_POINTS = 42;
+const EEG_WAVE_TICK_MS = 120;
+const EEG_BLINK_DECAY_MS = 650;
 
 const CLOUD_SEEDS: readonly CloudSeed[] = [
   { x: 120, y: 84, scale: 1.15, speed: 0.42, opacity: 0.72 },
@@ -61,11 +75,28 @@ const CLOUD_SEEDS: readonly CloudSeed[] = [
 
 const clamp = (value: number, min: number, max: number): number =>
   Math.min(max, Math.max(min, value));
+const clamp01 = (value: number): number => clamp(value, 0, 1);
+const clampSignal = (value: number): number => clamp(value, -1, 1);
 
 const wrap = (value: number, range: number): number => {
   const wrapped = value % range;
   return wrapped < 0 ? wrapped + range : wrapped;
 };
+
+const createDefaultWave = (phase = 0): number[] =>
+  Array.from(
+    { length: EEG_WAVE_POINTS },
+    (_, index) => Math.sin(phase + (index / EEG_WAVE_POINTS) * Math.PI * 3.5) * 0.15,
+  );
+
+const createInitialEegPaneState = (): EegPaneState => ({
+  waveSamples: createDefaultWave(),
+  leftPower: 0.3,
+  rightPower: 0.3,
+  confidence: 0,
+  packetRateHz: 0,
+  activeHemisphere: "left",
+});
 
 const getPipeGap = (score: number): number =>
   Math.max(MIN_PIPE_GAP, BASE_PIPE_GAP - score * PIPE_GAP_SHRINK_PER_SCORE);
@@ -421,6 +452,7 @@ export default function FlappyBirdPage() {
   const [controlMode, setControlMode] = useState<ControlMode>("manual");
   const [score, setScore] = useState(0);
   const [bestScore, setBestScore] = useState<number>(() => loadBestScore());
+  const [eegPane, setEegPane] = useState<EegPaneState>(() => createInitialEegPaneState());
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const runtimeRef = useRef<RuntimeState>(createRuntimeState());
@@ -432,6 +464,14 @@ export default function FlappyBirdPage() {
   const blinkCountRef = useRef(blink.blinkCount);
   const blinkPulseAtMsRef = useRef(0);
   const isStreamingRef = useRef(isStreaming);
+  const eegLastBlinkAtMsRef = useRef<number | null>(null);
+  const eegWavePhaseRef = useRef(0);
+  const eegActiveHemisphereRef = useRef<EegHemisphere>("left");
+  const eegBlinkRateWindowRef = useRef({
+    windowStartMs: performance.now(),
+    blinkCount: 0,
+    packetRateHz: 0,
+  });
 
   useEffect(() => {
     phaseRef.current = phase;
@@ -458,6 +498,20 @@ export default function FlappyBirdPage() {
     runtimeRef.current.score = next;
     setScore(next);
   }, []);
+
+  const pushEegSample = useCallback(
+    (sample: number, patch: Partial<Omit<EegPaneState, "waveSamples">> = {}) => {
+      setEegPane((current) => ({
+        ...current,
+        ...patch,
+        waveSamples: [
+          ...current.waveSamples.slice(-(EEG_WAVE_POINTS - 1)),
+          clampSignal(sample),
+        ],
+      }));
+    },
+    [],
+  );
 
   const finishRun = useCallback(() => {
     if (phaseRef.current === "gameover") {
@@ -638,14 +692,85 @@ export default function FlappyBirdPage() {
   useEffect(() => {
     const previousBlinkCount = blinkCountRef.current;
     blinkCountRef.current = blink.blinkCount;
-    if (blink.blinkCount <= previousBlinkCount) {
+    const blinkDelta = blink.blinkCount - previousBlinkCount;
+    if (blinkDelta <= 0) {
       return;
     }
+
+    const now = performance.now();
+    eegLastBlinkAtMsRef.current = now;
+    blinkPulseAtMsRef.current = now;
+    eegActiveHemisphereRef.current =
+      blink.blinkCount % 2 === 0 ? "right" : "left";
+    const activeHemisphere = eegActiveHemisphereRef.current;
+
+    const blinkRateWindow = eegBlinkRateWindowRef.current;
+    blinkRateWindow.blinkCount += blinkDelta;
+    const elapsed = now - blinkRateWindow.windowStartMs;
+    if (elapsed >= 1000) {
+      blinkRateWindow.packetRateHz = (blinkRateWindow.blinkCount * 1000) / elapsed;
+      blinkRateWindow.blinkCount = 0;
+      blinkRateWindow.windowStartMs = now;
+    }
+
+    const direction = activeHemisphere === "right" ? 1 : -1;
+    pushEegSample(direction * 0.88, {
+      leftPower: activeHemisphere === "left" ? 0.93 : 0.4,
+      rightPower: activeHemisphere === "right" ? 0.93 : 0.4,
+      confidence: 1,
+      packetRateHz: blinkRateWindow.packetRateHz,
+      activeHemisphere,
+    });
+
     if (modeRef.current !== "eeg" || phaseRef.current !== "running") {
       return;
     }
     flap();
-  }, [blink.blinkCount, flap]);
+  }, [blink.blinkCount, flap, pushEegSample]);
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      const now = performance.now();
+      const blinkRateWindow = eegBlinkRateWindowRef.current;
+      const elapsed = now - blinkRateWindow.windowStartMs;
+      if (elapsed >= 1000) {
+        blinkRateWindow.packetRateHz = (blinkRateWindow.blinkCount * 1000) / elapsed;
+        blinkRateWindow.blinkCount = 0;
+        blinkRateWindow.windowStartMs = now;
+      }
+
+      const lastBlinkAt = eegLastBlinkAtMsRef.current;
+      const pulseStrength =
+        lastBlinkAt === null
+          ? 0
+          : clamp01(1 - (now - lastBlinkAt) / EEG_BLINK_DECAY_MS);
+      eegWavePhaseRef.current += 0.34;
+      const phase = eegWavePhaseRef.current;
+      const activeHemisphere = eegActiveHemisphereRef.current;
+      const direction = activeHemisphere === "right" ? 1 : -1;
+      const sample = clampSignal(
+        direction * pulseStrength * 0.42 +
+          Math.sin(phase) * (0.14 + pulseStrength * 0.28) +
+          Math.sin(phase * 0.47) * 0.09,
+      );
+
+      pushEegSample(sample, {
+        leftPower:
+          activeHemisphere === "left"
+            ? 0.34 + pulseStrength * 0.58
+            : 0.22 + pulseStrength * 0.12,
+        rightPower:
+          activeHemisphere === "right"
+            ? 0.34 + pulseStrength * 0.58
+            : 0.22 + pulseStrength * 0.12,
+        confidence: pulseStrength,
+        packetRateHz: blinkRateWindow.packetRateHz,
+        activeHemisphere,
+      });
+    }, EEG_WAVE_TICK_MS);
+
+    return () => window.clearInterval(intervalId);
+  }, [pushEegSample]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -795,9 +920,20 @@ export default function FlappyBirdPage() {
                   ? "Paused"
                   : phase === "gameover"
                     ? "R to restart"
-                    : "Esc returns to menu"}
+                : "Esc returns to menu"}
             </div>
           </div>
+
+          <EEGStreamModal
+            waveSamples={eegPane.waveSamples}
+            leftPower={eegPane.leftPower}
+            rightPower={eegPane.rightPower}
+            confidence={eegPane.confidence}
+            packetRateHz={eegPane.packetRateHz}
+            activeHemisphere={eegPane.activeHemisphere}
+            mode="features"
+            positionClassName="bottom-3 left-3 sm:bottom-4 sm:left-4"
+          />
 
           <div className="absolute bottom-3 right-3 z-20 flex flex-wrap gap-2 sm:bottom-4 sm:right-4">
             <button

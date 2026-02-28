@@ -744,6 +744,7 @@ export default function BreakoutPage() {
             packetRateHz={eegPane.packetRateHz}
             activeHemisphere={eegPane.activeHemisphere}
             mode="classifier"
+            positionClassName="top-3 right-3"
           />
           {gameOver && (
             <div className="absolute inset-0 z-30 flex items-center justify-center pointer-events-none">
