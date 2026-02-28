@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { BALL_SPEED_X, BALL_SPEED_Y, stepPongPhysics } from "../src/features/pong/game/gameLoop";
+import {
+  BALL_SPEED_X,
+  BALL_SPEED_Y,
+  getPongDifficultyTuning,
+  stepPongPhysics,
+} from "../src/features/pong/game/gameLoop";
 import type { GameInputState, RuntimeState } from "../src/features/pong/types/pongRuntime";
 
 const createRuntimeState = (overrides?: Partial<RuntimeState>): RuntimeState => ({
@@ -23,6 +28,22 @@ const neutralInput = (): GameInputState => ({
 });
 
 describe("pong physics step", () => {
+  it("maps difficulty to steeper high-end speed scaling", () => {
+    const low = getPongDifficultyTuning(0);
+    const mid = getPongDifficultyTuning(0.5);
+    const high = getPongDifficultyTuning(0.8);
+    const peak = getPongDifficultyTuning(1);
+
+    expect(low.ballSpeedX).toBeLessThan(mid.ballSpeedX);
+    expect(mid.ballSpeedX).toBeLessThan(high.ballSpeedX);
+    expect(high.ballSpeedX).toBeLessThan(peak.ballSpeedX);
+
+    const highToPeakDelta = peak.ballSpeedX - high.ballSpeedX;
+    const midToHighDelta = high.ballSpeedX - mid.ballSpeedX;
+    expect(highToPeakDelta).toBeGreaterThan(midToHighDelta * 0.45);
+    expect(peak.aiErrorAmplitude).toBeLessThan(high.aiErrorAmplitude);
+  });
+
   it("crosses the field midline within deterministic ticks", () => {
     const state = createRuntimeState({
       ball: { x: 100, y: 60, radius: 10 },

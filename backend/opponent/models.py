@@ -13,6 +13,12 @@ class GameMode(str, Enum):
     COMBAT = "combat"
 
 
+class InputMode(str, Enum):
+    EEG = "eeg"
+    KEYBOARD_PADDLE = "keyboard_paddle"
+    KEYBOARD_BALL = "keyboard_ball"
+
+
 class GameEventType(str, Enum):
     PLAYER_SCORE = "player_score"
     AI_SCORE = "ai_score"
@@ -38,6 +44,7 @@ class OpponentGameEvent(BaseModel):
     type: Literal["game_event"]
     event_id: str = Field(min_length=1)
     game_mode: GameMode
+    input_mode: InputMode | None = None
     event: GameEventType
     score: ScorePayload
     current_difficulty: float = Field(ge=0.0, le=1.0)
@@ -103,4 +110,3 @@ class OpponentError(BaseModel):
     ]
     message: str
     recoverable: bool
-
