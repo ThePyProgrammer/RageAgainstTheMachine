@@ -179,6 +179,7 @@ def train_model(config: dict, X_train, y_train, X_val, y_val, channel_names: lis
         channel_names=channel_names,
         num_classes=model_cfg["num_classes"],
         freeze_encoder=model_cfg.get("freeze_encoder", True),
+        unfreeze_last_n_blocks=model_cfg.get("unfreeze_last_n_blocks", 0),
         pooling=model_cfg.get("pooling", "mean"),
         hidden_dim=model_cfg.get("hidden_dim", 256),
         dropout=model_cfg.get("dropout", 0.3),
@@ -186,7 +187,38 @@ def train_model(config: dict, X_train, y_train, X_val, y_val, channel_names: lis
 
     model.to(device)
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(model.parameters(), lr=config["training"]["learning_rate"])
+
+    head_lr = config["training"]["learning_rate"]
+    encoder_lr = config["training"].get("encoder_learning_rate", 1e-5)
+    weight_decay = config["training"].get("weight_decay", 0.0)
+
+    head_params = [p for p in model.classifier.parameters() if p.requires_grad]
+    encoder_params = [p for p in model.encoder.parameters() if p.requires_grad]
+    if encoder_params:
+        optimizer = optim.AdamW(
+            [
+                {"params": head_params, "lr": head_lr},
+                {"params": encoder_params, "lr": encoder_lr},
+            ],
+            weight_decay=weight_decay,
+        )
+    else:
+        optimizer = optim.AdamW(head_params, lr=head_lr, weight_decay=weight_decay)
+
+    num_head_params = sum(p.numel() for p in head_params)
+    num_encoder_params = sum(p.numel() for p in encoder_params)
+    print(
+        f"  Trainable params | head={num_head_params:,} "
+        f"encoder={num_encoder_params:,} "
+        f"(unfreeze_last_n_blocks={model_cfg.get('unfreeze_last_n_blocks', 0)})"
+    )
+    if num_encoder_params > 0:
+        print(
+            f"  Optimizer LRs | head={head_lr} encoder={encoder_lr} "
+            f"weight_decay={weight_decay}"
+        )
+    else:
+        print(f"  Optimizer LR  | head={head_lr} weight_decay={weight_decay}")
 
     save_path = (
         get_project_root()

@@ -79,7 +79,7 @@ class NeuralTransformerAttention(nn.Module):
         attn = (q @ k.transpose(-2, -1))
 
         if self.relative_position_bias is not None:
-            attn += self.relative_position_bias()
+            attn = attn + self.relative_position_bias()
         
         attn = attn.softmax(dim=-1)
         attn = self.attn_drop(attn)

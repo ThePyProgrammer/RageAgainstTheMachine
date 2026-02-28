@@ -17,6 +17,7 @@ class LaBraMProbe(nn.Module):
         channel_names: list[str],
         num_classes: int = 3,
         freeze_encoder: bool = True,
+        unfreeze_last_n_blocks: int = 0,
         pooling: str = "mean",
         hidden_dim: int = 256,
         dropout: float = 0.3,
@@ -27,10 +28,26 @@ class LaBraMProbe(nn.Module):
         self.channel_names = channel_names
         self.pooling = pooling
         self.freeze_encoder = freeze_encoder
+        self.unfreeze_last_n_blocks = max(0, int(unfreeze_last_n_blocks))
 
         if freeze_encoder:
             for param in self.encoder.parameters():
                 param.requires_grad = False
+
+        if self.unfreeze_last_n_blocks > 0:
+            total_blocks = len(self.encoder.model.blocks)
+            n = min(self.unfreeze_last_n_blocks, total_blocks)
+            for block in self.encoder.model.blocks[-n:]:
+                for param in block.parameters():
+                    param.requires_grad = True
+
+            # Keep encoder output scale adaptable when any encoder blocks are trainable.
+            for param in self.encoder.model.norm.parameters():
+                param.requires_grad = True
+
+        self.encoder_has_trainable_params = any(
+            p.requires_grad for p in self.encoder.parameters()
+        )
 
         embed_dim = self.encoder.model.embed_dim
         self.classifier = nn.Sequential(
@@ -50,15 +67,15 @@ class LaBraMProbe(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # x: (B, N, T)
-        if self.freeze_encoder:
+        if self.encoder_has_trainable_params:
+            tokens = self.encoder(
+                x, channel_names=self.channel_names, return_patch_tokens=True
+            )
+        else:
             with torch.no_grad():
                 tokens = self.encoder(
                     x, channel_names=self.channel_names, return_patch_tokens=True
                 )
-        else:
-            tokens = self.encoder(
-                x, channel_names=self.channel_names, return_patch_tokens=True
-            )
 
         pooled = self._pool_tokens(tokens)
         return self.classifier(pooled)

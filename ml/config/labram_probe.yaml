@@ -70,13 +70,16 @@ model:
   checkpoint_path: "labram/labram-base.pth"
   num_classes: 3
   freeze_encoder: true
+  unfreeze_last_n_blocks: 2 # Unfreeze final transformer blocks for adaptation
   pooling: "mean"
   hidden_dim: 256
   dropout: 0.3
 
 training:
   batch_size: 32
-  learning_rate: 0.001
+  learning_rate: 0.001 # Probe head LR
+  encoder_learning_rate: 0.00001 # LR for unfrozen LaBraM blocks
+  weight_decay: 0.01
   num_epochs: 200
   early_stopping_patience: 40
   savedir: models/labram_probe
