@@ -32,6 +32,7 @@ const NEAR_ZONE_RATIO = 0.18;
 const NEAR_SCORE_COOLDOWN_MS = 1200;
 const MAX_FRAME_DELTA_MS = 50;
 const MAX_STEPS_PER_TICK = 6;
+const EEG_PADDLE_SPEED_MULTIPLIER = 1.45;
 
 const clamp = (value: number, min: number, max: number): number =>
   Math.min(max, Math.max(min, value));
@@ -151,6 +152,7 @@ export const stepPongPhysics = (
   currentBallVX: number,
   currentBallVY: number,
   difficulty: number = DEFAULT_DIFFICULTY,
+  eegAssist: boolean = false,
 ): StepResult => {
   const tuning = getPongDifficultyTuning(difficulty);
   let ballVX = currentBallVX;
@@ -164,9 +166,12 @@ export const stepPongPhysics = (
   if (controlMode === "paddle") {
     const moveLeft = inputState.left || inputState.up;
     const moveRight = inputState.right || inputState.down;
+    const playerSpeed = eegAssist
+      ? tuning.playerPaddleSpeed * EEG_PADDLE_SPEED_MULTIPLIER
+      : tuning.playerPaddleSpeed;
     runtimeState.topPaddle.x +=
       ((moveRight ? 1 : 0) - (moveLeft ? 1 : 0)) *
-      tuning.playerPaddleSpeed *
+      playerSpeed *
       (FRAME_MS / 1000);
   }
 
@@ -390,6 +395,7 @@ export const createPongLoop = (cfg: LoopConfig) => {
         ballVX,
         ballVY,
         liveDifficulty,
+        eegCommandRef?.current !== "none",
       );
 
       ballVX = stepResult.ballVX;
