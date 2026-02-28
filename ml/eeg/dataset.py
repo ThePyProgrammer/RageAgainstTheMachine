@@ -31,7 +31,7 @@ class PhysioNetDataset:
     - T2: Right fist (runs 3,4,7,8,11,12) or both feet (other runs)
     """
 
-    def __init__(self, data_dir: str = "mi/data/raw/physionet"):
+    def __init__(self, data_dir: str = "data/raw/physionet"):
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)
 
@@ -73,13 +73,19 @@ class PhysioNetDataset:
         subject_id: int,
         runs: List[int] = None,
         channels: List[str] = None,
+        event_keys: List[str] | None = None,
+        return_event_id: bool = False,
+        return_channel_names: bool = False,
     ) -> tuple:
         """Load and preprocess data for a subject.
 
         Args:
             subject_id: Subject number
             runs: Runs to load
-            channels: Specific channels to use (default: C3, Cz, C4)
+            channels: Specific channels to use. Use "all" or ["all"] for full montage.
+            event_keys: Which event keys to include (default: ["T1", "T2"])
+            return_event_id: If True, return filtered event_id mapping
+            return_channel_names: If True, also return selected channel names
 
         Returns:
             Tuple of (epochs, labels)
@@ -104,8 +110,21 @@ class PhysioNetDataset:
         # Standardize channel names
         mne.datasets.eegbci.standardize(raw)
 
-        # Pick motor cortex channels
-        raw.pick_channels(channels, ordered=True)
+        use_all_channels = (
+            isinstance(channels, str)
+            and channels.lower() == "all"
+            or isinstance(channels, list)
+            and len(channels) == 1
+            and channels[0].lower() == "all"
+        )
+
+        # Pick channels
+        if use_all_channels:
+            raw.pick_types(eeg=True, exclude=[])
+        else:
+            raw.pick_channels(channels, ordered=True)
+
+        selected_channel_names = list(raw.ch_names)
 
         # Find events - let MNE extract the actual event IDs
         events, event_id = mne.events_from_annotations(raw, verbose=False)
@@ -113,9 +132,11 @@ class PhysioNetDataset:
         # Print available events for debugging
         print(f"  Available events: {event_id}")
 
-        # We want T1 (left fist/hand) and T2 (right fist/hand)
-        # Filter event_id to only include T1 and T2
-        motor_imagery_events = {k: v for k, v in event_id.items() if k in ["T1", "T2"]}
+        if event_keys is None:
+            event_keys = ["T1", "T2"]
+
+        # Filter event_id to only include desired event keys
+        motor_imagery_events = {k: v for k, v in event_id.items() if k in event_keys}
 
         if not motor_imagery_events:
             raise ValueError(
@@ -137,6 +158,15 @@ class PhysioNetDataset:
         # Get data and labels
         X = epochs.get_data()  # Shape: (n_epochs, n_channels, n_times)
         y = epochs.events[:, -1]  # Event codes
+
+        if return_event_id and return_channel_names:
+            return X, y, motor_imagery_events, selected_channel_names
+
+        if return_event_id:
+            return X, y, motor_imagery_events
+
+        if return_channel_names:
+            return X, y, selected_channel_names
 
         return X, y
 

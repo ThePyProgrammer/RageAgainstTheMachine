@@ -42,6 +42,9 @@ class EEGStreamer:
             sampling_rate=cyton_cfg["sampling_rate"],
         )
         self.cc_broadcaster = WebSocketBroadcaster()
+        self._cc_signal_lock = threading.Lock()
+        self._latest_cc_signal = None
+        self._latest_cc_monotonic = None
         self.eeg_buffer = None
 
         # Embedding processor for LaBraM
@@ -61,6 +64,9 @@ class EEGStreamer:
         self.stop_event.clear()
         self.session_start_time = datetime.now()
         self.command_centre_processor.reset()
+        with self._cc_signal_lock:
+            self._latest_cc_signal = None
+            self._latest_cc_monotonic = None
         if EEG_DRY_RUN:
             self.is_running = True
             return True, "dry_run"
@@ -194,6 +200,7 @@ class EEGStreamer:
                 cc_payload = self.command_centre_processor.update(filtered_chunk)
                 if cc_payload is not None:
                     cc_payload["device_type"] = "cyton"
+                    self._store_latest_cc_signal(cc_payload)
                     self.cc_broadcaster.broadcast_json({"signal": cc_payload})
 
         except Exception as exc:
@@ -234,6 +241,20 @@ class EEGStreamer:
 
     def unregister_cc_client(self, websocket):
         self.cc_broadcaster.unregister_client(websocket)
+
+    def _store_latest_cc_signal(self, payload: dict) -> None:
+        with self._cc_signal_lock:
+            self._latest_cc_signal = payload.copy()
+            self._latest_cc_monotonic = time.monotonic()
+
+    def get_latest_cc_signal(self) -> dict | None:
+        with self._cc_signal_lock:
+            if self._latest_cc_signal is None:
+                return None
+            return {
+                "payload": self._latest_cc_signal.copy(),
+                "monotonic": self._latest_cc_monotonic,
+            }
 
 
 # --- Multi-device streamer management ---

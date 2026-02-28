@@ -46,6 +46,7 @@ dependencies = [
     "python-multipart>=0.0.9",
     "fastapi>=0.115.12",
     "gradio>=3.40.1",
+    "openai>=1.68.2",
     "requests>=2.31.0",
     "uvicorn>=0.24.0",
     "websockets>=11.0.3",

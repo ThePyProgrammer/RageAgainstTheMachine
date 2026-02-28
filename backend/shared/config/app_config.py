@@ -34,3 +34,12 @@ RECORDING_OUTPUT_DIR = "data/raw/eeg"
 # Database config
 HF_REPO_ID = os.getenv("HF_REPO")
 HF_TOKEN = os.getenv("HF_TOKEN")
+
+# OpenAI / Opponent config
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+OPPONENT_TEXT_MODEL = os.getenv("OPPONENT_TEXT_MODEL", "gpt-4.1-mini")
+OPPONENT_TTS_MODEL = os.getenv("OPPONENT_TTS_MODEL", "gpt-4o-mini-tts")
+OPPONENT_TTS_VOICE = os.getenv("OPPONENT_TTS_VOICE", "alloy")
+OPPONENT_MAX_TAUNT_CHARS = int(os.getenv("OPPONENT_MAX_TAUNT_CHARS", "80"))
+OPPONENT_MIN_TAUNT_INTERVAL_MS = int(os.getenv("OPPONENT_MIN_TAUNT_INTERVAL_MS", "1800"))
+OPPONENT_TIMEOUT_MS = int(os.getenv("OPPONENT_TIMEOUT_MS", "5000"))
