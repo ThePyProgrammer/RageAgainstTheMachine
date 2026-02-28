@@ -21,13 +21,19 @@ class OpenAIOpponentService:
         self,
         api_key: str | None,
         text_model: str,
+        text_temperature: float,
         tts_model: str,
         tts_voice: str,
+        tts_instructions: str,
+        tts_speed: float,
         timeout_ms: int,
     ) -> None:
         self._text_model = text_model
+        self._text_temperature = max(0.0, min(2.0, float(text_temperature)))
         self._tts_model = tts_model
         self._tts_voice = tts_voice
+        self._tts_instructions = tts_instructions.strip()
+        self._tts_speed = max(0.25, min(4.0, float(tts_speed)))
         self._timeout_seconds = max(timeout_ms, 1000) / 1000.0
         self._client = None
 
@@ -70,6 +76,7 @@ class OpenAIOpponentService:
             client = with_options(timeout=self._timeout_seconds)
         response = client.responses.create(
             model=self._text_model,
+            temperature=self._text_temperature,
             input=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
@@ -91,7 +98,12 @@ class OpenAIOpponentService:
         parsed = json.loads(output_text)
         return OpponentLLMOutput.model_validate(parsed)
 
-    def generate_speech_base64(self, text: str) -> str:
+    def generate_speech_base64(
+        self,
+        text: str,
+        *,
+        instructions: str | None = None,
+    ) -> str:
         if self._client is None:
             raise RuntimeError("OpenAI client is unavailable")
         if not text.strip():
@@ -101,11 +113,22 @@ class OpenAIOpponentService:
         with_options = getattr(client, "with_options", None)
         if callable(with_options):
             client = with_options(timeout=self._timeout_seconds)
+        effective_instructions = self._tts_instructions
+        if instructions and instructions.strip():
+            if effective_instructions:
+                effective_instructions = (
+                    f"{effective_instructions} {instructions.strip()}"
+                )
+            else:
+                effective_instructions = instructions.strip()
+
         speech_response = client.audio.speech.create(
             model=self._tts_model,
             voice=self._tts_voice,
             input=text,
             response_format="mp3",
+            instructions=effective_instructions,
+            speed=self._tts_speed,
         )
         audio_bytes = self._extract_audio_bytes(speech_response)
         if not audio_bytes:

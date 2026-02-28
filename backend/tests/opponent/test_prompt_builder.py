@@ -12,7 +12,7 @@ from opponent.services.prompt_builder import build_system_prompt, build_user_pro
 
 def test_system_prompt_contains_constraints() -> None:
     prompt = build_system_prompt(max_taunt_chars=80)
-    assert "friendly" in prompt.lower()
+    assert "playful" in prompt.lower()
     assert "no harassment" in prompt.lower()
     assert "<= 80" in prompt
 
@@ -34,4 +34,3 @@ def test_user_prompt_contains_event_and_metrics() -> None:
     assert "near_score" in prompt
     assert "stress: 0.640" in prompt
     assert "suggested_prior_difficulty: 0.820" in prompt
-

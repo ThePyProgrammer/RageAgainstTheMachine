@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
+import re
 import time
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
 
-from eeg.services.stream_service import get_active_streamer
 from opponent.models import (
     MetaPayload,
     MetricsPayload,
@@ -25,18 +25,32 @@ from opponent.services.difficulty_service import (
 )
 from opponent.services.fallback_service import RuleBasedFallbackService
 from opponent.services.openai_service import OpenAIOpponentService
-from opponent.services.prompt_builder import build_system_prompt, build_user_prompt
+from opponent.services.prompt_builder import (
+    STYLE_REFERENCE_EXAMPLES,
+    build_system_prompt,
+    build_user_prompt,
+)
 from opponent.services.session_service import OpponentSessionService
 from shared.config.app_config import (
     OPENAI_API_KEY,
     OPPONENT_MAX_TAUNT_CHARS,
     OPPONENT_MIN_TAUNT_INTERVAL_MS,
     OPPONENT_TEXT_MODEL,
+    OPPONENT_TEXT_TEMPERATURE,
     OPPONENT_TIMEOUT_MS,
+    OPPONENT_TTS_INSTRUCTIONS,
     OPPONENT_TTS_MODEL,
+    OPPONENT_TTS_SPEED,
     OPPONENT_TTS_VOICE,
 )
 from shared.config.logging import get_logger
+
+try:
+    from eeg.services.stream_service import get_active_streamer
+except Exception:  # pragma: no cover - allows standalone testing without EEG deps
+    def get_active_streamer():
+        raise RuntimeError("EEG stream service unavailable in current environment")
+
 
 router = APIRouter(
     prefix="/opponent",
@@ -56,8 +70,11 @@ DEFAULT_METRICS = MetricsSnapshot(
 openai_service = OpenAIOpponentService(
     api_key=OPENAI_API_KEY,
     text_model=OPPONENT_TEXT_MODEL,
+    text_temperature=OPPONENT_TEXT_TEMPERATURE,
     tts_model=OPPONENT_TTS_MODEL,
     tts_voice=OPPONENT_TTS_VOICE,
+    tts_instructions=OPPONENT_TTS_INSTRUCTIONS,
+    tts_speed=OPPONENT_TTS_SPEED,
     timeout_ms=OPPONENT_TIMEOUT_MS,
 )
 fallback_service = RuleBasedFallbackService()
@@ -216,7 +233,15 @@ async def _generate_response_bundle(
             user_prompt=user_prompt,
             max_taunt_chars=OPPONENT_MAX_TAUNT_CHARS,
         )
-        taunt_text = llm_output.taunt_text[:OPPONENT_MAX_TAUNT_CHARS]
+        taunt_text = _clean_taunt_text(
+            llm_output.taunt_text,
+            max_chars=OPPONENT_MAX_TAUNT_CHARS,
+        )
+        if _looks_canned(taunt_text):
+            taunt_text = _clean_taunt_text(
+                fallback_service.generate_taunt(event=event, metrics=metrics),
+                max_chars=OPPONENT_MAX_TAUNT_CHARS,
+            )
         model_target = llm_output.difficulty_target
         provider = "responses_speech"
     except Exception as exc:
@@ -231,7 +256,10 @@ async def _generate_response_bundle(
         return provider, taunt_text, model_target, audio_base64
 
     try:
-        audio_base64 = openai_service.generate_speech_base64(taunt_text)
+        audio_base64 = openai_service.generate_speech_base64(
+            taunt_text,
+            instructions=_build_dynamic_tts_instructions(metrics=metrics),
+        )
     except Exception as exc:
         logger.error("OpenAI speech generation failed: %s", exc, exc_info=True)
         await websocket.send_json(
@@ -283,3 +311,96 @@ def _safe_signal_value(raw_value: object, default: float) -> float:
         return clamp01(float(raw_value))
     except Exception:
         return default
+
+
+def _build_dynamic_tts_instructions(metrics: MetricsSnapshot) -> str:
+    dominant, value = _dominant_metric(metrics)
+    if dominant == "stress":
+        return "Lean into sharp, punchy delivery with a knowing grin in the voice."
+    if dominant == "frustration":
+        return "Add playful provocation — animated, almost gleeful needling."
+    if dominant == "focus":
+        return "Crisp and rapid, like a commentator hyping a clutch play."
+    return "Bright and bouncy with teasing confidence."
+
+
+def _dominant_metric(metrics: MetricsSnapshot) -> tuple[str, float]:
+    values = {
+        "stress": metrics.stress,
+        "frustration": metrics.frustration,
+        "focus": metrics.focus,
+        "alertness": metrics.alertness,
+    }
+    key = max(values, key=values.get)
+    return key, values[key]
+
+
+def _clean_taunt_text(text: str, max_chars: int) -> str:
+    """Normalize whitespace, strip leaked numbers/terms, trim to length."""
+    normalized = " ".join(text.split())
+    if not normalized:
+        return "I'll let you figure that one out."
+
+    # Strip leaked numeric values and percentages.
+    normalized = re.sub(r"\b\d+(?:\.\d+)?%?\b", "", normalized)
+    normalized = normalized.replace("%", "")
+    # Replace leaked internal terminology.
+    normalized = re.sub(
+        r"\b(difficulty|difficulty_target|target|adjustment)\b",
+        "pressure",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    # Collapse repeated punctuation and whitespace.
+    normalized = re.sub(r"([.!?]){2,}", r"\1", normalized)
+    normalized = re.sub(r"\s{2,}", " ", normalized).strip()
+
+    if not normalized:
+        return "I'll let you figure that one out."
+    return _trim_taunt(normalized, max_chars=max_chars)
+
+
+def _looks_canned(text: str) -> bool:
+    lowered = text.lower()
+    banned_fragments = (
+        "keep up",
+        "try harder",
+        "ready for",
+        "nice shot",
+        "can you handle",
+        "keep watching",
+        "let's see if you can",
+        "curveball",
+        "powerup",
+    )
+    if any(fragment in lowered for fragment in banned_fragments):
+        return True
+    # Reject taunts that copy a style example too closely (5-word overlap).
+    words = lowered.split()
+    if len(words) >= 5:
+        for _, example in STYLE_REFERENCE_EXAMPLES:
+            example_lower = example.lower()
+            for i in range(len(words) - 4):
+                if " ".join(words[i : i + 5]) in example_lower:
+                    return True
+    return False
+
+
+def _trim_taunt(text: str, max_chars: int) -> str:
+    cleaned = text.strip()
+    if len(cleaned) <= max_chars:
+        return cleaned
+
+    head = cleaned[: max_chars + 1]
+    # Prefer ending on punctuation near the limit.
+    for punct in (".", "!", "?"):
+        idx = head.rfind(punct)
+        if idx >= max_chars - 24:
+            return head[: idx + 1].strip()
+
+    # Otherwise, cut on the last full word.
+    cut = head.rfind(" ")
+    if cut > 0:
+        return head[:cut].rstrip(" ,.;:!?")
+
+    return head[:max_chars].rstrip(" ,.;:!?")
