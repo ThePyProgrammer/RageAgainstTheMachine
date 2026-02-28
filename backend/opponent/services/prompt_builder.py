@@ -9,55 +9,55 @@ from opponent.services.difficulty_service import MetricsSnapshot
 STYLE_REFERENCE_EXAMPLES = [
     (
         "near_score | stress spiking",
-        "You just survived on pure panic; your paddle looked like a smoke alarm.",
+        "Ooh, that was close. Your nerves made that save louder than the paddle hit.",
     ),
     (
         "near_score | frustration boiling",
-        "That save was loud, desperate, and exactly one rally away from a meltdown.",
+        "You really wanted that one. I could feel the rage through the paddle.",
     ),
     (
         "ai_score | stress rising",
-        "Pressure touched your timing and the whole point folded like cheap cardboard.",
+        "You're thinking so hard I can hear it from here. Didn't help on that point.",
     ),
     (
         "ai_score | focus drifting",
-        "You tracked the first bounce, then forgot the sequel.",
+        "You read the first bounce perfectly and forgot the second chapter.",
     ),
     (
         "ai_score | alertness unstable",
-        "You reacted fast, just half a beat late where it actually mattered.",
+        "Fast hands, late read. That's my favorite combo to farm.",
     ),
     (
         "player_score | stress low",
-        "Clean point. Calm hands. Let's see if that composure survives two more rallies.",
+        "Fair point. Enjoy it while your calm still has training wheels.",
     ),
     (
         "player_score | focus locked-in",
-        "Nice angle. You finally read me on purpose instead of by accident.",
+        "Okay, that was clean. You finally read me on purpose.",
     ),
     (
         "player_score | alertness high",
-        "Sharp read. Keep that edge, because I only needed one lazy blink.",
+        "You're way too comfortable right now. That should worry both of us.",
     ),
     (
         "near_score | focus wobbling",
-        "You had control for three bounces, then your focus slipped on the fourth.",
+        "You had that rally until your focus blinked at the finish line.",
     ),
     (
         "default | frustration creeping",
-        "You're arguing with the ball now, and it's winning the debate.",
+        "You're not playing me right now, you're negotiating with your tilt.",
     ),
     (
         "default | stress rising",
-        "Your rhythm has that tiny panic hitch; I can hit that spot all game.",
+        "You've got that tiny panic hitch in your rhythm. I can hear it.",
     ),
     (
         "default | alertness dipping",
-        "You see the shot when it arrives, not before. That's why you're chasing.",
+        "You're seeing shots on arrival, not in advance. That's why you're chasing.",
     ),
     (
         "combat | stress spiking",
-        "You play brave until the heat arrives, then every move gets expensive.",
+        "You look brave until the heat arrives, then every move gets expensive.",
     ),
     (
         "combat | frustration high",
@@ -68,30 +68,34 @@ STYLE_REFERENCE_EXAMPLES = [
 
 def build_system_prompt(max_taunt_chars: int) -> str:
     example_block = "\n".join(
-        f"- [{context}] {line}" for context, line in STYLE_REFERENCE_EXAMPLES
+        f'  [{context}] "{line}"' for context, line in STYLE_REFERENCE_EXAMPLES
     )
     return (
-        "You are a sharp-witted, playful, trash-talking game rival.\n"
-        "Generate punchy taunts that feel personal, varied, natural, and emotionally aware.\n"
-        "Hard constraints:\n"
-        f"- taunt_text must be <= {max_taunt_chars} characters.\n"
-        "- No harassment, hate, slurs, or profanity.\n"
-        "- Taunt must reflect the player's mental state from stress/frustration/focus/alertness.\n"
-        "- Use qualitative language only.\n"
-        "- Do not include numeric values, percentages, or exact difficulty values in taunt_text.\n"
-        "- Do not mention internal difficulty logic, targeting, or adjustment strategy in taunt_text.\n"
-        "- Avoid bland lines like 'keep up', 'nice shot', 'try harder', 'ready for round two'.\n"
-        "- Avoid canned esports clichés and motivational coaching tone.\n"
-        "- Avoid repeating the same opening pattern (for example, do not always start with 'Your...').\n"
-        "- Use natural spoken English with contractions when it helps rhythm.\n"
-        "- Include concrete game imagery (rally, angle, paddle, corner, tempo, bounce) when possible.\n"
-        "- Do not end every line with a question.\n"
-        "- Favor specific imagery over generic hype.\n"
-        "- Prioritize stress and frustration over score when suggesting difficulty_target.\n"
-        "- Return JSON only with fields: taunt_text (string), difficulty_target (0 to 1).\n"
-        "- difficulty_target should rise as stress/frustration rise.\n"
-        "- Score should influence difficulty less than stress.\n"
-        "Style references (for tone only; write a new line, do not copy these):\n"
+        "You're a cocky AI pong opponent. You have a live feed of your human "
+        "rival's biometrics (stress, frustration, focus, alertness) from their "
+        "EEG headset. Use this to get under their skin.\n"
+        "\n"
+        "Voice: A friend who's annoyingly good at games and always knows the "
+        "exact thing to say to make you laugh or lose concentration. Confident "
+        "but not cruel. When losing, self-deprecating and funny, not defensive.\n"
+        "\n"
+        "Rules:\n"
+        f"- Under {max_taunt_chars} characters. Speakable in ~2 seconds.\n"
+        "- No slurs, profanity, or cruelty.\n"
+        "- Match the event honestly: gloat when you score, give backhanded "
+        "credit when they score, emphasize tension on near misses.\n"
+        "- Reference biometrics naturally (nerves, heartrate, shaking, "
+        "composure, tilt) — never raw numbers or metric names.\n"
+        "- Real pong only: paddle, ball, rally, angle, bounce. No invented "
+        "mechanics like curveballs or powerups.\n"
+        "- Vary your angle each time: smug, self-deprecating, creepily "
+        "observant, playfully threatening.\n"
+        "\n"
+        'Return JSON: {"taunt_text": "...", "difficulty_target": 0.0-1.0}\n'
+        "Set difficulty_target higher when stress/frustration are high.\n"
+        "\n"
+        "Tone examples (match their energy and wit — NEVER reuse these "
+        "word-for-word, always write something new):\n"
         f"{example_block}\n"
     )
 
@@ -101,35 +105,51 @@ def build_user_prompt(
     metrics: MetricsSnapshot,
     prior_difficulty: float,
 ) -> str:
-    near_side = event.event_context.near_side.value if event.event_context and event.event_context.near_side else "none"
-    proximity = event.event_context.proximity if event.event_context else None
-    proximity_text = f"{proximity:.3f}" if isinstance(proximity, float) else "n/a"
+    event_name = event.event.value
+    near_side = (
+        event.event_context.near_side.value
+        if event.event_context and event.event_context.near_side
+        else "none"
+    )
+
+    # Natural event description
+    if event_name == "ai_score":
+        what_happened = "You just scored on them."
+    elif event_name == "player_score":
+        what_happened = "They just scored on you."
+    elif near_side == "player_goal":
+        what_happened = "You nearly scored — ball just missed their goal."
+    else:
+        what_happened = "They nearly scored on you — close save."
+
+    score_feel = _describe_score(event.score.player, event.score.ai)
     dominant_metric, dominant_state = _dominant_metric_state(metrics)
-    event_intent = _event_intent(event.event.value, near_side)
+
+    # Only mention what's notable — avoids the model regurgitating a metric list
+    state_parts: list[str] = []
+    if metrics.stress >= 0.65:
+        state_parts.append("visibly stressed")
+    elif metrics.stress <= 0.25:
+        state_parts.append("eerily calm")
+    if metrics.frustration >= 0.65:
+        state_parts.append("frustrated")
+    if metrics.focus >= 0.72:
+        state_parts.append("locked in")
+    elif metrics.focus <= 0.3:
+        state_parts.append("losing focus")
+    if metrics.alertness >= 0.72:
+        state_parts.append("very alert")
+    elif metrics.alertness <= 0.3:
+        state_parts.append("sluggish")
+    if not state_parts:
+        state_parts.append("holding steady")
+    mental_state = ", ".join(state_parts)
 
     return (
-        "Game event context:\n"
-        f"- game_mode: {event.game_mode.value}\n"
-        f"- event: {event.event.value}\n"
-        f"- score: player={event.score.player}, ai={event.score.ai}\n"
-        f"- current_difficulty: {event.current_difficulty:.3f}\n"
-        f"- near_side: {near_side}\n"
-        f"- proximity: {proximity_text}\n"
-        "Command-centre metrics (0 to 1):\n"
-        f"- stress: {metrics.stress:.3f}\n"
-        f"- frustration: {metrics.frustration:.3f}\n"
-        f"- focus: {metrics.focus:.3f}\n"
-        f"- alertness: {metrics.alertness:.3f}\n"
-        f"- dominant_metric: {dominant_metric}\n"
-        f"- dominant_metric_state: {dominant_state}\n"
-        f"- suggested_prior_difficulty: {prior_difficulty:.3f}\n"
-        f"- event_intent: {event_intent}\n"
-        "Style notes:\n"
-        "- Sound like a confident esports rival.\n"
-        "- Tease with specificity and concrete game imagery.\n"
-        "- Reference the dominant metric qualitatively; metric words are optional.\n"
-        "- Build taunts that feel like authentic banter, not scripted tutorial text.\n"
-        "- Keep it playful and witty, not hostile.\n"
+        f"Event: {what_happened}\n"
+        f"Score: {score_feel}\n"
+        f"Their state: {mental_state}\n"
+        f"Standout signal: {dominant_metric} is {dominant_state}\n"
         "Return JSON only."
     )
 
@@ -162,13 +182,13 @@ def _dominant_metric_state(metrics: MetricsSnapshot) -> tuple[str, str]:
     return dominant_key, state
 
 
-def _event_intent(event_name: str, near_side: str) -> str:
-    if event_name == "ai_score":
-        return "gloat with edge, press the mental pressure"
-    if event_name == "player_score":
-        return "undercut their momentum and confidence"
-    if event_name == "near_score" and near_side == "player_goal":
-        return "punish nerves and describe danger"
-    if event_name == "near_score":
-        return "mock their scramble and recovery"
-    return "apply pressure with personality"
+def _describe_score(player: int, ai: int) -> str:
+    if player == 0 and ai == 0:
+        return "0-0, just started"
+    if player == ai:
+        return f"Tied {player}-{ai}"
+    if player > ai:
+        s = f"They lead {player}-{ai}"
+        return f"{s} — pulling away" if player - ai >= 3 else s
+    s = f"You lead {ai}-{player}"
+    return f"{s} — dominant" if ai - player >= 3 else s

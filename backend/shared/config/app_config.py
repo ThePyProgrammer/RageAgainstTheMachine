@@ -37,15 +37,18 @@ HF_TOKEN = os.getenv("HF_TOKEN")
 
 # OpenAI / Opponent config
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-OPPONENT_TEXT_MODEL = os.getenv("OPPONENT_TEXT_MODEL", "gpt-4.1-mini")
-OPPONENT_TEXT_TEMPERATURE = float(os.getenv("OPPONENT_TEXT_TEMPERATURE", "1.1"))
+OPPONENT_TEXT_MODEL = os.getenv("OPPONENT_TEXT_MODEL", "gpt-4.1")
+OPPONENT_TEXT_TEMPERATURE = float(os.getenv("OPPONENT_TEXT_TEMPERATURE", "1.0"))
 OPPONENT_TTS_MODEL = os.getenv("OPPONENT_TTS_MODEL", "gpt-4o-mini-tts")
-OPPONENT_TTS_VOICE = os.getenv("OPPONENT_TTS_VOICE", "marin")
+OPPONENT_TTS_VOICE = os.getenv("OPPONENT_TTS_VOICE", "ballad")
 OPPONENT_TTS_INSTRUCTIONS = os.getenv(
     "OPPONENT_TTS_INSTRUCTIONS",
     (
-        "Speak with energetic competitive confidence, varied intonation, and playful sarcasm. "
-        "Keep pacing brisk and engaging."
+        "Energetic and animated with dynamic pitch variations. "
+        "Excited, enthusiastic tone conveying an upbeat, thrilling atmosphere. "
+        "Rapid delivery on key moments to build intensity, slightly slower during dramatic pauses "
+        "to let points sink in. Intensely focused and positive energy. "
+        "Relatable and engaging personality. Short purposeful pauses after key moments."
     ),
 )
 OPPONENT_TTS_SPEED = float(os.getenv("OPPONENT_TTS_SPEED", "1.18"))

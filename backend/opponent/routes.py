@@ -25,7 +25,11 @@ from opponent.services.difficulty_service import (
 )
 from opponent.services.fallback_service import RuleBasedFallbackService
 from opponent.services.openai_service import OpenAIOpponentService
-from opponent.services.prompt_builder import build_system_prompt, build_user_prompt
+from opponent.services.prompt_builder import (
+    STYLE_REFERENCE_EXAMPLES,
+    build_system_prompt,
+    build_user_prompt,
+)
 from opponent.services.session_service import OpponentSessionService
 from shared.config.app_config import (
     OPENAI_API_KEY,
@@ -229,15 +233,13 @@ async def _generate_response_bundle(
             user_prompt=user_prompt,
             max_taunt_chars=OPPONENT_MAX_TAUNT_CHARS,
         )
-        taunt_text = _ensure_metric_reference(
+        taunt_text = _clean_taunt_text(
             llm_output.taunt_text,
-            metrics=metrics,
             max_chars=OPPONENT_MAX_TAUNT_CHARS,
         )
         if _looks_canned(taunt_text):
-            taunt_text = _ensure_metric_reference(
+            taunt_text = _clean_taunt_text(
                 fallback_service.generate_taunt(event=event, metrics=metrics),
-                metrics=metrics,
                 max_chars=OPPONENT_MAX_TAUNT_CHARS,
             )
         model_target = llm_output.difficulty_target
@@ -314,12 +316,12 @@ def _safe_signal_value(raw_value: object, default: float) -> float:
 def _build_dynamic_tts_instructions(metrics: MetricsSnapshot) -> str:
     dominant, value = _dominant_metric(metrics)
     if dominant == "stress":
-        return "Use sharper emphasis and a quick, confident cadence."
+        return "Lean into sharp, punchy delivery with a knowing grin in the voice."
     if dominant == "frustration":
-        return "Lean into playful provocation with animated intonation."
+        return "Add playful provocation — animated, almost gleeful needling."
     if dominant == "focus":
-        return "Use crisp pacing with bright competitive energy."
-    return "Use lively projection with light teasing confidence."
+        return "Crisp and rapid, like a commentator hyping a clutch play."
+    return "Bright and bouncy with teasing confidence."
 
 
 def _dominant_metric(metrics: MetricsSnapshot) -> tuple[str, float]:
@@ -333,66 +335,29 @@ def _dominant_metric(metrics: MetricsSnapshot) -> tuple[str, float]:
     return key, values[key]
 
 
-def _ensure_metric_reference(text: str, metrics: MetricsSnapshot, max_chars: int) -> str:
+def _clean_taunt_text(text: str, max_chars: int) -> str:
+    """Normalize whitespace, strip leaked numbers/terms, trim to length."""
     normalized = " ".join(text.split())
     if not normalized:
-        normalized = "You're cracking under pressure."
+        return "I'll let you figure that one out."
 
-    # Keep taunts qualitative: strip explicit numeric mentions and percent markers.
+    # Strip leaked numeric values and percentages.
     normalized = re.sub(r"\b\d+(?:\.\d+)?%?\b", "", normalized)
     normalized = normalized.replace("%", "")
+    # Replace leaked internal terminology.
     normalized = re.sub(
-        r"\b(difficulty|difficulty_target|target|adjustment|adjust|raise|lower)\b",
+        r"\b(difficulty|difficulty_target|target|adjustment)\b",
         "pressure",
         normalized,
         flags=re.IGNORECASE,
     )
-    normalized = re.sub(r"\s{2,}", " ", normalized).strip(" ,.;:!?")
+    # Collapse repeated punctuation and whitespace.
+    normalized = re.sub(r"([.!?]){2,}", r"\1", normalized)
+    normalized = re.sub(r"\s{2,}", " ", normalized).strip()
+
     if not normalized:
-        normalized = "You're cracking under pressure."
-
-    lowered = normalized.lower()
-    metric_terms = ("stress", "frustration", "focus", "alertness")
-    has_metric_ref = any(term in lowered for term in metric_terms)
-    metric_fragment = _qualitative_metric_fragment(metrics)
-
-    candidate = normalized
-    if not has_metric_ref:
-        candidate = f"{normalized}. {metric_fragment}"
-
-    candidate = candidate.strip(" .")
-    if len(candidate) > max_chars:
-        candidate = candidate[:max_chars].rstrip(" ,.;:!?")
-    if not candidate:
-        candidate = metric_fragment[:max_chars]
-    return candidate
-
-
-def _qualitative_metric_fragment(metrics: MetricsSnapshot) -> str:
-    dominant, value = _dominant_metric(metrics)
-    if dominant == "stress":
-        if value > 0.72:
-            return "Stress is spiking and I can see it."
-        if value > 0.45:
-            return "Stress is climbing and your rhythm is slipping."
-        return "Stress is steady, but the pressure is still on."
-    if dominant == "frustration":
-        if value > 0.72:
-            return "Frustration is taking over your decision making."
-        if value > 0.45:
-            return "Frustration is creeping into your timing."
-        return "Frustration is low, but I can change that."
-    if dominant == "focus":
-        if value > 0.72:
-            return "Focus is sharp, but I can still shake you."
-        if value > 0.45:
-            return "Focus is wobbling under pressure."
-        return "Focus is fading and your reactions show it."
-    if value > 0.72:
-        return "Alertness is high, so I am turning up the heat."
-    if value > 0.45:
-        return "Alertness is unstable and your tempo is uneven."
-    return "Alertness is dipping and you are reacting late."
+        return "I'll let you figure that one out."
+    return _trim_taunt(normalized, max_chars=max_chars)
 
 
 def _looks_canned(text: str) -> bool:
@@ -405,5 +370,37 @@ def _looks_canned(text: str) -> bool:
         "can you handle",
         "keep watching",
         "let's see if you can",
+        "curveball",
+        "powerup",
     )
-    return any(fragment in lowered for fragment in banned_fragments)
+    if any(fragment in lowered for fragment in banned_fragments):
+        return True
+    # Reject taunts that copy a style example too closely (5-word overlap).
+    words = lowered.split()
+    if len(words) >= 5:
+        for _, example in STYLE_REFERENCE_EXAMPLES:
+            example_lower = example.lower()
+            for i in range(len(words) - 4):
+                if " ".join(words[i : i + 5]) in example_lower:
+                    return True
+    return False
+
+
+def _trim_taunt(text: str, max_chars: int) -> str:
+    cleaned = text.strip()
+    if len(cleaned) <= max_chars:
+        return cleaned
+
+    head = cleaned[: max_chars + 1]
+    # Prefer ending on punctuation near the limit.
+    for punct in (".", "!", "?"):
+        idx = head.rfind(punct)
+        if idx >= max_chars - 24:
+            return head[: idx + 1].strip()
+
+    # Otherwise, cut on the last full word.
+    cut = head.rfind(" ")
+    if cut > 0:
+        return head[:cut].rstrip(" ,.;:!?")
+
+    return head[:max_chars].rstrip(" ,.;:!?")

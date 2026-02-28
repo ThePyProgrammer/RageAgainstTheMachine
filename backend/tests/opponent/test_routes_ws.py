@@ -199,3 +199,18 @@ def test_taunt_is_qualitative_not_numeric(monkeypatch) -> None:
         taunt = response["taunt_text"]
         assert re.search(r"\d", taunt) is None
         assert "%" not in taunt
+
+
+def test_taunt_trim_avoids_mid_word_cut() -> None:
+    taunt = (
+        "Snapped that bounce clean and stole your tempo.. "
+        "You're awake, but I'm still faster."
+    )
+    trimmed = opponent_routes._ensure_metric_reference(
+        taunt,
+        metrics=opponent_routes.DEFAULT_METRICS,
+        max_chars=70,
+    )
+    assert len(trimmed) <= 70
+    assert ".." not in trimmed
+    assert not trimmed.endswith("bu")
