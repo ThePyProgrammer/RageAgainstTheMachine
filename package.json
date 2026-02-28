@@ -1,0 +1,22 @@
+{
+  "name": "@rage/combat-monorepo",
+  "private": true,
+  "workspaces": [
+    "frontend",
+    "frontend/packages/bci-shared",
+    "server/combat3d"
+  ],
+  "scripts": {
+    "dev:pong": "npm run dev --workspace atc-c3-bci",
+    "dev:combat3d": "npm run dev:combat3d --workspace atc-c3-bci",
+    "dev:combat3d:server": "npm run dev --workspace @rage/combat3d-server",
+    "dev:combat3d:stack": "concurrently \"npm run dev:combat3d:server\" \"npm run dev:combat3d\"",
+    "build": "npm run build --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "dev": "npm run dev:pong"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}
