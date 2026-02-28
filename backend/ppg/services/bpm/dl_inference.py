@@ -38,7 +38,7 @@ class DLInference:
             self.model = PhysNet_padding_Encoder_Decoder_MAX(frames=128).to(self.device)
             # Load weights
             if os.path.exists(self.model_path):
-                checkpoint = torch.load(self.model_path, map_location=self.device)
+                checkpoint = torch.load(self.model_path, map_location=self.device, weights_only=False)
                 self.model.load_state_dict(checkpoint)
                 self.model.eval()
                 logger.info("Loaded PhysNet model from %s", self.model_path)

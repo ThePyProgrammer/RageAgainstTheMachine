@@ -116,7 +116,7 @@ def initialize_mi_controller(config: dict, model_path: Path) -> MotorImageryCont
     use_attention = bool(config["model"].get("use_attention", False))
     architecture_name = "EEGNetResidual" if use_residual else "EEGNet"
     if model_path.exists():
-        checkpoint = torch.load(model_path, map_location=device)
+        checkpoint = torch.load(model_path, map_location=device, weights_only=False)
         state_dict = checkpoint.get("model_state_dict", {})
         model_cfg = checkpoint.get("model_config")
         if model_cfg:
@@ -220,9 +220,9 @@ def initialize():
         logger.info(f"Model ready at {model_path}")
 
         # Preload test data (this triggers download if needed)
-        # logger.info("Loading test data...")
-        # test_data_X, test_data_y = preload_test_data(config)
-        # logger.info(f"Test data loaded: {len(test_data_X)} epochs")
+        logger.info("Loading test data...")
+        test_data_X, test_data_y = preload_test_data(config)
+        logger.info(f"Test data loaded: {len(test_data_X)} epochs")
 
         # Initialize controller
         logger.info("Initializing controller...")
